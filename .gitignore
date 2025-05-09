@@ -1,0 +1,7 @@
+__pycache__/
+anti-aliasing/
+Research/
+TEST_IMAGES/
+weights/
+gfpgan/
+*.pyc
