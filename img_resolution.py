@@ -85,28 +85,28 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         )
         
         final_image = upscaler_GFPGAN.enhance(np.array(input_image), progress_queue=progress_bar_queue)
-        return Image.fromarray(final_image)
+        final_image = Image.fromarray(final_image)
+    else:
+        tiles, positions, valid_sizes, original_size = tile_image_with_overlap(input_image, IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP)
     
-    
-    tiles, positions, valid_sizes, original_size = tile_image_with_overlap(input_image, IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP)
-    
-    upscaled_tiles = []
-    for i, tile in enumerate(tiles):
-        upscaled_tile, _ = upscaler_ESRGAN.enhance(np.array(tile))
-        upscaled_tiles.append(Image.fromarray(upscaled_tile))
-        if progress_bar_queue:
-            progress_bar_queue.put((i / len(tiles)) * 100)
+        upscaled_tiles = []
+        for i, tile in enumerate(tiles):
+            upscaled_tile = upscaler_ESRGAN.enhance(np.array(tile))
+            upscaled_tiles.append(Image.fromarray(upscaled_tile))
+            if progress_bar_queue:
+                progress_bar_queue.put((i / len(tiles)) * 100)
 
-    final_image = stitch_tiles_with_blending(upscaled_tiles, 
-                                             positions, 
-                                             valid_sizes, 
-                                             original_size, 
-                                             IMAGE_TILE_SIZE,
-                                             IMAGE_TILE_OVERLAP, 
-                                             upscale_factor)
+        final_image = np.array(stitch_tiles_with_blending(upscaled_tiles, 
+                                                positions, 
+                                                valid_sizes, 
+                                                original_size, 
+                                                IMAGE_TILE_SIZE,
+                                                IMAGE_TILE_OVERLAP, 
+                                                upscale_factor))
     
     if outscale_factor < 1:
         final_image, _ = resize_image(None, photo_image=final_image, new_height=final_image.height * outscale_factor, new_width=final_image.width * outscale_factor)
+        
     return final_image
 
 ########## OPENCV UPSCALING

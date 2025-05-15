@@ -150,7 +150,7 @@ class GFPGANer():
     
                 upscaled_tiles = []
                 for i, tile in enumerate(tiles):
-                    upscaled_tile, _ = self.bg_upsampler.enhance(np.array(tile), outscale=self.upscale)
+                    upscaled_tile = self.bg_upsampler.enhance(np.array(tile), outscale=self.upscale)
                     upscaled_tiles.append(Image.fromarray(upscaled_tile))
                     if progress_queue:
                         progress_queue.put((i / len(tiles)) * 100)

@@ -260,7 +260,7 @@ class RealESRGANer():
                     int(h_input * outscale),
                 ), interpolation=cv2.INTER_LANCZOS4)
 
-        return output, img_mode
+        return output
 
 
 class PrefetchReader(threading.Thread):
