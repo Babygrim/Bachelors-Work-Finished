@@ -98,7 +98,7 @@ def show_error_popup(self, message):
     frame = customtkinter.CTkFrame(self.error_popup, fg_color='#20374c', bg_color='#20374c')
     frame.pack(padx=2, pady=2)
     
-    message_label = StyledCTkLabel(frame, text="ERROR: " + message, wraplength=300, justify="left")
+    message_label = StyledCTkLabel(frame, text="ERROR: " + message[:100], wraplength=300, justify="left")
     message_label.grid(row=0, column=1, padx=(5, 10), pady=10, sticky="w")
 
     close_button = StyledCTkButton(frame, text="Close", command=self.error_popup.destroy)

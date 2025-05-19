@@ -1,9 +1,7 @@
 from PIL import Image, ImageOps
 import numpy as np
 from PIL import Image
-import numpy as np
-import cv2
-from scipy.signal import convolve2d
+
 
 #color inversion
 def invert_image_colors(input_img, values): 
@@ -32,22 +30,26 @@ def wiener_filter(input_img, kernel, K):
     dummy = np.abs(np.fft.ifft2(dummy))
     return np.uint8(np.clip(dummy, 0, 255))
 
-def deblur_image_wiener(input_img, values):
-    # Convert PIL image to grayscale NumPy array
+def gaussian_kernel(size, sigma):
+    """Generate a Gaussian kernel (PSF)."""
+    ax = np.linspace(-(size // 2), size // 2, size)
+    xx, yy = np.meshgrid(ax, ax)
+    kernel = np.exp(-(xx**2 + yy**2) / (2. * sigma**2))
+    return kernel / np.sum(kernel)
+
+def deblur_image_wiener(input_img, progress_queue, value):
     img = input_img.convert('L')
-    value = int(values[0])
     img_np = np.array(img)
 
-    # Create horizontal motion blur kernel
-    kernel = np.zeros((value, value))
-    kernel[value // 2, :] = np.ones(value)
-    kernel /= value
+    # Use a Gaussian kernel matching the blur radius
+    kernel_size = 2 * int(value) + 1
+    sigma = value
+    kernel = gaussian_kernel(kernel_size, sigma)
 
     # Apply Wiener filter
-    deblurred_np = wiener_filter(img_np, kernel, 0.1)
+    deblurred_np = wiener_filter(img_np, kernel, K=0.5)
 
     # Convert back to PIL image
-    deblurred_pil = Image.fromarray(deblurred_np)
+    deblurred_pil = Image.fromarray(deblurred_np).convert('RGBA')
     return deblurred_pil
-
     

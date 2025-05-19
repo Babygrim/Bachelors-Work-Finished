@@ -22,6 +22,8 @@ DEFAULT_SWITCH_METHOD_OFF_VALUE = False
 
 ICONS_DIRECTORY = "icons"
 
+FUNC_EXCEPTIONS = ['upscale_image', 'deblur_image_ESRGAN']
+
 
 # APP
 DEFAULT_IMAGE_ID = None

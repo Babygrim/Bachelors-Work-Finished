@@ -1,5 +1,4 @@
 from PIL import Image
-from math import ceil
 from realesrganer_my import RealESRGANer
 from gfpganer_my import GFPGANer
 from basicsr.archs.rrdbnet_arch import RRDBNet
@@ -52,9 +51,9 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
     if not os.path.exists(weights_path):
         raise FileNotFoundError(f"Weight file not found: {weights_path}")
 
-    try:
+    if torch_directml.is_available():
         device = torch_directml.device()
-    except RuntimeError:
+    else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     upscale_factor = int(upscale_factor)
@@ -94,15 +93,15 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
             upscaled_tile = upscaler_ESRGAN.enhance(np.array(tile))
             upscaled_tiles.append(Image.fromarray(upscaled_tile))
             if progress_bar_queue:
-                progress_bar_queue.put((i / len(tiles)) * 100)
+                progress_bar_queue.put(((i + 1) / len(tiles)) * 100)
 
-        final_image = np.array(stitch_tiles_with_blending(upscaled_tiles, 
+        final_image = stitch_tiles_with_blending(upscaled_tiles, 
                                                 positions, 
                                                 valid_sizes, 
                                                 original_size, 
                                                 IMAGE_TILE_SIZE,
                                                 IMAGE_TILE_OVERLAP, 
-                                                upscale_factor))
+                                                upscale_factor)
     
     if outscale_factor < 1:
         final_image, _ = resize_image(None, photo_image=final_image, new_height=final_image.height * outscale_factor, new_width=final_image.width * outscale_factor)

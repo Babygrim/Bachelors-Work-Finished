@@ -354,21 +354,21 @@ class App():
         sample_factor_two.set(DEFAULT_RESOLUTION_VALUES["2x"])
         
         
-        self.msaa_label = StyledCTkLabel(self.module_toolframe, text="Select sampling factor")
-        self.msaa_label.pack(fill=X, padx=5, pady=(10, 0))
-        for (text, value) in DEFAULT_RESOLUTION_VALUES.items():
-            StyledCTkRadio(self.module_toolframe, text = text, variable=sample_factor_MSAA, 
-                        value = value).pack(fill=X, padx=5, pady=(5, 0))
+        # self.msaa_label = StyledCTkLabel(self.module_toolframe, text="Select sampling factor")
+        # self.msaa_label.pack(fill=X, padx=5, pady=(10, 0))
+        # for (text, value) in DEFAULT_RESOLUTION_VALUES.items():
+        #     StyledCTkRadio(self.module_toolframe, text = text, variable=sample_factor_MSAA, 
+        #                 value = value).pack(fill=X, padx=5, pady=(5, 0))
         
-        self.perform_multisample = StyledCTkButton(self.module_toolframe, text="MSAA", command=lambda: self.modify_image(values={
-                                                                                                                            'switch': [],
-                                                                                                                            'slider': [],
-                                                                                                                            'checkbox': [(sample_factor_MSAA, )]
-                                                                                                                            }, 
-                                                                                                                         function=img_resolution.multisampling, 
-                                                                                                                         text_value=None, 
-                                                                                                                         type="processing"))
-        self.perform_multisample.pack(fill=X, padx=5, pady=5)
+        # self.perform_multisample = StyledCTkButton(self.module_toolframe, text="MSAA", command=lambda: self.modify_image(values={
+        #                                                                                                                     'switch': [],
+        #                                                                                                                     'slider': [],
+        #                                                                                                                     'checkbox': [(sample_factor_MSAA, )]
+        #                                                                                                                     }, 
+        #                                                                                                                  function=img_resolution.multisampling, 
+        #                                                                                                                  text_value=None, 
+        #                                                                                                                  type="processing"))
+        # self.perform_multisample.pack(fill=X, padx=5, pady=5)
 
         self.upscale_label = StyledCTkLabel(self.module_toolframe, text="Select upscale factor")
         self.upscale_label.pack(fill=X, padx=5, pady=(10, 0))
@@ -451,65 +451,65 @@ class App():
                                                                                                                          type="processing"))
         self.perform_upscale.pack(fill=X, padx=5, pady=5)
         
-        self.upscale_label_two = StyledCTkLabel(self.module_toolframe, text="Select upscale factor")
-        self.upscale_label_two.pack(fill=X, padx=5, pady=(10, 0))
+        # self.upscale_label_two = StyledCTkLabel(self.module_toolframe, text="Select upscale factor")
+        # self.upscale_label_two.pack(fill=X, padx=5, pady=(10, 0))
         
-        for (text, value) in DEFAULT_RESOLUTION_VALUES.items():
-            StyledCTkRadio(self.module_toolframe, text = text, variable = upscale_factor_two, 
-                        value = value).pack(fill=X, padx=5, pady=(5, 0))
+        # for (text, value) in DEFAULT_RESOLUTION_VALUES.items():
+        #     StyledCTkRadio(self.module_toolframe, text = text, variable = upscale_factor_two, 
+        #                 value = value).pack(fill=X, padx=5, pady=(5, 0))
         
-        self.perform_upscale_two = StyledCTkButton(self.module_toolframe, text="cv2 upscale", command=lambda: self.modify_image(values={
-                                                                                                                            'switch': [],
-                                                                                                                            'slider': [],
-                                                                                                                            'checkbox': [(upscale_factor_two, )]
-                                                                                                                            }, 
-                                                                                                                         function=img_resolution.upscale_cv2, 
-                                                                                                                         text_value=None, 
-                                                                                                                         type="processing"))
-        self.perform_upscale_two.pack(fill=X, padx=5, pady=5)
+        # self.perform_upscale_two = StyledCTkButton(self.module_toolframe, text="cv2 upscale", command=lambda: self.modify_image(values={
+        #                                                                                                                     'switch': [],
+        #                                                                                                                     'slider': [],
+        #                                                                                                                     'checkbox': [(upscale_factor_two, )]
+        #                                                                                                                     }, 
+        #                                                                                                                  function=img_resolution.upscale_cv2, 
+        #                                                                                                                  text_value=None, 
+        #                                                                                                                  type="processing"))
+        # self.perform_upscale_two.pack(fill=X, padx=5, pady=5)
         
-        self.upscale_label_three = StyledCTkLabel(self.module_toolframe, text="Select sampling factor")
-        self.upscale_label_three.pack(fill=X, padx=5, pady=(10, 0))
+        # self.upscale_label_three = StyledCTkLabel(self.module_toolframe, text="Select sampling factor")
+        # self.upscale_label_three.pack(fill=X, padx=5, pady=(10, 0))
         
-        for (text, value) in DEFAULT_RESOLUTION_VALUES.items():
-            StyledCTkRadio(self.module_toolframe, text = text, variable = sample_factor_two, 
-                        value = value).pack(fill=X, padx=5, pady=(5, 0))
+        # for (text, value) in DEFAULT_RESOLUTION_VALUES.items():
+        #     StyledCTkRadio(self.module_toolframe, text = text, variable = sample_factor_two, 
+        #                 value = value).pack(fill=X, padx=5, pady=(5, 0))
         
-        self.perform_multisample_two = StyledCTkButton(self.module_toolframe, text="GFLW/OpenGL sampling", command=lambda: self.modify_image(values={
-                                                                                                                            'switch': [],
-                                                                                                                            'slider': [],
-                                                                                                                            'checkbox': [(sample_factor_two, )]
-                                                                                                                            }, 
-                                                                                                                         function=img_anti_aliasing.glfw_openGL_anti_aliasing, 
-                                                                                                                         text_value=None, 
-                                                                                                                         type="processing"))
-        self.perform_multisample_two.pack(fill=X, padx=5, pady=5)
+        # self.perform_multisample_two = StyledCTkButton(self.module_toolframe, text="GFLW/OpenGL sampling", command=lambda: self.modify_image(values={
+        #                                                                                                                     'switch': [],
+        #                                                                                                                     'slider': [],
+        #                                                                                                                     'checkbox': [(sample_factor_two, )]
+        #                                                                                                                     }, 
+        #                                                                                                                  function=img_anti_aliasing.glfw_openGL_anti_aliasing, 
+        #                                                                                                                  text_value=None, 
+        #                                                                                                                  type="processing"))
+        # self.perform_multisample_two.pack(fill=X, padx=5, pady=5)
         
         
-        deblur_kernel_variable = tk.IntVar(value=200)
-        self.deblur_slider = StyledCTkLabel(self.module_toolframe, text="Deblur Kernel Size (2.00)")
-        self.deblur_selector = customtkinter.CTkSlider(self.module_toolframe, from_=100, to=1000, orientation=tk.HORIZONTAL, width=150, number_of_steps=9, variable=deblur_kernel_variable)
-        self.deblur_selector.configure(command = lambda value: self.modify_image(values={
-                                                                                    'switch': [],
-                                                                                    'slider': [(deblur_kernel_variable, )],
-                                                                                    'checkbox': []
-                                                                                    }, 
-                                                                                 function=None, 
-                                                                                 text_value=("Deblur Kernel Size", self.deblur_slider), 
-                                                                                 type='helper')) # this is done simply to update label text (part of modify image functionality)
-        self.deblur_selector.set(DEFAULT_SLIDER_VALUES['Deblur'])
-        self.deblur_slider.pack(fill="x", padx=5, pady=(10, 0))
-        self.deblur_selector.pack(fill="x", padx=5, pady=5)
+        # deblur_kernel_variable = tk.IntVar(value=200)
+        # self.deblur_slider = StyledCTkLabel(self.module_toolframe, text="Deblur Kernel Size (2.00)")
+        # self.deblur_selector = customtkinter.CTkSlider(self.module_toolframe, from_=100, to=1000, orientation=tk.HORIZONTAL, width=150, number_of_steps=9, variable=deblur_kernel_variable)
+        # self.deblur_selector.configure(command = lambda value: self.modify_image(values={
+        #                                                                             'switch': [],
+        #                                                                             'slider': [(deblur_kernel_variable, )],
+        #                                                                             'checkbox': []
+        #                                                                             }, 
+        #                                                                          function=None, 
+        #                                                                          text_value=("Deblur Kernel Size", self.deblur_slider), 
+        #                                                                          type='helper')) # this is done simply to update label text (part of modify image functionality)
+        # self.deblur_selector.set(DEFAULT_SLIDER_VALUES['Deblur'])
+        # self.deblur_slider.pack(fill="x", padx=5, pady=(10, 0))
+        # self.deblur_selector.pack(fill="x", padx=5, pady=5)
         
-        self.deblur_image = StyledCTkButton(self.module_toolframe, text="Deblur Image", command=lambda: self.modify_image(values={
-                                                                                                                            'switch': [],
-                                                                                                                            'slider': [(deblur_kernel_variable, )],
-                                                                                                                            'checkbox': []
-                                                                                                                            }, 
-                                                                                                                            function=img_effects.deblur_image_wiener, 
-                                                                                                                            text_value=None, 
-                                                                                                                            type="processing"))
-        self.deblur_image.pack(fill="x", padx=5, pady=(10, 0))
+        # self.deblur_image = StyledCTkButton(self.module_toolframe, text="Deblur Image", command=lambda: self.modify_image(values={
+        #                                                                                                                     'switch': [],
+        #                                                                                                                     'slider': [], # (deblur_kernel_variable, )
+        #                                                                                                                     'checkbox': []
+        #                                                                                                                     }, 
+        #                                                                                                                     function=img_effects.deblur_image_wiener, 
+        #                                                                                                                     text_value=None, 
+        #                                                                                                                     type="processing"))
+        # self.deblur_image.pack(fill="x", padx=5, pady=(10, 0))
         
         self.denoise = StyledCTkButton(self.module_toolframe, text="Denoise", command=lambda: self.modify_image(values={
                                                                                                                 'switch': [],
@@ -523,11 +523,11 @@ class App():
         
         # Integrate into App class
         selectors = {
-            "MSAA_one": (img_resolution.multisampling, {
-                                                    'switch': [],
-                                                    'slider': [],
-                                                    'checkbox': [(sample_factor_MSAA, )]
-                                                    }, None),
+            # "MSAA_one": (img_resolution.multisampling, {
+            #                                         'switch': [],
+            #                                         'slider': [],
+            #                                         'checkbox': [(sample_factor_MSAA, )]
+            #                                         }, None),
             "AI_UPSCALE": (img_resolution.upscale_image, {
                                                     'switch': [(image_scale_variable, facial_restoration_variable)],
                                                     'slider': [],
@@ -537,17 +537,17 @@ class App():
                                                         'slider': [],
                                                         'checkbox': [],
                                                     }),
-            "UPSCALE_two": (img_resolution.upscale_cv2, {
-                                                    'switch': [],
-                                                    'slider': [],
-                                                    'checkbox': [(upscale_factor_two, )]
-                                                    }, None),
+            # "UPSCALE_two": (img_resolution.upscale_cv2, {
+            #                                         'switch': [],
+            #                                         'slider': [],
+            #                                         'checkbox': [(upscale_factor_two, )]
+            #                                         }, None),
             
-            "MSAA_two": (img_anti_aliasing.glfw_openGL_anti_aliasing, {
-                                                    'switch': [],
-                                                    'slider': [],
-                                                    'checkbox': [(sample_factor_two, )]
-                                                    }, None),
+            # "MSAA_two": (img_anti_aliasing.glfw_openGL_anti_aliasing, {
+            #                                         'switch': [],
+            #                                         'slider': [],
+            #                                         'checkbox': [(sample_factor_two, )]
+            #                                         }, None),
         }
         
         callers = {
@@ -560,16 +560,16 @@ class App():
                             'slider': [],
                             'checkbox': [],
                         }),
-            "Deblur": (img_effects.deblur_image_wiener, 
-                       {
-                            'switch': [],
-                            'slider': [],
-                            'checkbox': [(deblur_kernel_variable, )]
-                        }, {
-                            'switch': [],
-                            'slider': [("Deblur Kernel Size", self.deblur_slider)],
-                            'checkbox': [],
-                        }),
+            # "Deblur": (img_effects.deblur_image_wiener, 
+            #            {
+            #                 'switch': [],
+            #                 'slider': [],
+            #                 'checkbox': [] # (deblur_kernel_variable, )
+            #             }, {
+            #                 'switch': [],
+            #                 'slider': [], # ("Deblur Kernel Size", self.deblur_slider)
+            #                 'checkbox': [],
+            #             }),
         }
         
         self.app_methods[_ModuleName] = {

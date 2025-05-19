@@ -3,7 +3,7 @@ from queue import Empty
 from styles import StyledCTkLabel
 from image_tiling import *
 import inspect
-from constants import IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP
+from constants import IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP, FUNC_EXCEPTIONS
 
 def update_progress(self, progress):
     if self.progress_label.winfo_exists() and self.progress_bar.winfo_exists():
@@ -30,14 +30,14 @@ def cancel_progress(self):
 
 def image_processing_wrapper(func, input_img, queue, progress_queue, func_args):
     try:
-        if func.__name__ != 'upscale_image':
+        if func.__name__ not in FUNC_EXCEPTIONS:
             tiles, positions, valid_sizes, original_size = tile_image_with_overlap(input_img, IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP)
             
             processed_tiles = []
             for index, tile in enumerate(tiles):
                 result = func(tile, progress_queue, *func_args)
                 processed_tiles.append(result)
-                progress_queue.put((index / len(tiles)) * 100)
+                progress_queue.put(((index + 1) / len(tiles)) * 100)
                 
             # Stitch all upscaled tiles
             processed_image = stitch_tiles_with_blending(tiles, 
