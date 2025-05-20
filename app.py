@@ -335,8 +335,7 @@ class App():
         for child in self.module_toolframe.winfo_children():
             child.destroy()
         
-        AI_res_vals = {'1x': 1,
-                       '2x': 2,
+        AI_res_vals = {'2x': 2,
                        '4x': 4}
         
         sample_factor_MSAA = tk.IntVar()
@@ -348,7 +347,7 @@ class App():
         sample_factor_two = tk.IntVar()
         
         sample_factor_MSAA.set(DEFAULT_RESOLUTION_VALUES["2x"])
-        upscale_factor.set(AI_res_vals["1x"])
+        upscale_factor.set(AI_res_vals["2x"])
         image_scale_variable.set(False)
         upscale_factor_two.set(DEFAULT_RESOLUTION_VALUES["2x"])
         sample_factor_two.set(DEFAULT_RESOLUTION_VALUES["2x"])
