@@ -1,7 +1,7 @@
 from PIL import Image
 from realesrganer_my import RealESRGANer
 from gfpganer_my import GFPGANer
-from basicsr.archs.rrdbnet_arch import RRDBNet
+from rrdbnet_arch import RRDBNet
 import torch_directml
 import torch
 import os

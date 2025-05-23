@@ -380,7 +380,8 @@ class App():
             child.destroy()
         
         AI_res_vals = {'2x': 2,
-                       '4x': 4}
+                       '4x': 4,
+                       '8x': 8}
         
         sample_factor_MSAA = tk.IntVar()
         upscale_factor = tk.IntVar()
