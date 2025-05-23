@@ -390,3 +390,72 @@
 
 
 # main_window.mainloop()
+
+import cv2
+import numpy as np
+from PIL import Image
+
+def add_gaussian_noise(image, mean=0, sigma=25):
+    noise = np.random.normal(mean, sigma, image.shape).astype(np.float32)
+    noisy_img = cv2.add(image.astype(np.float32), noise)
+    return np.clip(noisy_img, 0, 255).astype(np.uint8)
+
+def psnr(target, ref):
+    target_data = target.astype(np.float32)
+    ref_data = ref.astype(np.float32)
+    mse = np.mean((ref_data - target_data) ** 2)
+    if mse == 0:
+        return float('inf')
+    return 20 * np.log10(255.0 / np.sqrt(mse))
+
+def denoise_methods(noisy_img):
+    methods = {}
+
+    # 1. Gaussian Blur
+    methods['GaussianBlur'] = cv2.GaussianBlur(noisy_img, (5, 5), 0)
+
+    # 2. Median Blur
+    methods['MedianBlur'] = cv2.medianBlur(noisy_img, 5)
+
+    # 3. Bilateral Filter
+    methods['BilateralFilter'] = cv2.bilateralFilter(noisy_img, 9, 75, 75)
+
+    # 4. Non-Local Means
+    methods['FastNlMeans'] = cv2.fastNlMeansDenoisingColored(noisy_img, None, 10, 10, 6, 18)
+
+    return methods
+
+def evaluate_methods(original, denoised_dict):
+    scores = {}
+    for method, output in denoised_dict.items():
+        score = psnr(original, output)
+        scores[method] = score
+    return scores
+
+def main():
+    # Load original image
+    original = Image.open("./TEST_IMAGES/car-denoise.webp")
+    original = np.array(original)
+
+    # Denoise using different methods
+    denoised_results = denoise_methods(original)
+
+    # Evaluate and find the best one
+    psnr_scores = evaluate_methods(original, denoised_results)
+    best_method = min(psnr_scores, key=psnr_scores.get)
+    best_image = denoised_results[best_method]
+
+    # Output
+    print(f"Best method: {best_method} with PSNR = {psnr_scores[best_method]:.2f} dB")
+    cv2.imwrite("noisy_image.jpg", original)
+    cv2.imwrite(f"best_denoised_{best_method}.jpg", best_image)
+
+    # Optional: Show results
+    cv2.imshow("Original", original)
+    cv2.imshow("Noisy", original)
+    cv2.imshow("Best Denoised", best_image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()

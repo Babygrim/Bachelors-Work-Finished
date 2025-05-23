@@ -4,6 +4,7 @@ from styles import (StyledCTkButton, StyledCTkLabel,
                     DEFAULT_FONT, DEFAULT_FONT_SIZE,
                     CORNER_RADIUS)
 
+#### THIS IS NOT USED YET
 def add_popup_menu_items(self, menu, suboptions_objects):
     """
     Add a menu item with a dynamic submenu(s) on hover.
@@ -27,7 +28,19 @@ def canvas_suboption_click(self, suboption):
     Handle clicks on suboptions.
     """
     print(f"Selected: {suboption}")
+####
+
+def change_progress_state(self, mode):
+    if self.progress_bar.winfo_exists():
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode=mode)
+        if mode=='indeterminate':
+            self.progress_bar.start()
     
+    if self.popup.winfo_exists():
+        self.popup.update_idletasks()
+        self.popup.update()
+   
 def change_progress_status_text(self, text):
     self.information_label.configure(text=text)
 
@@ -62,7 +75,7 @@ def show_progress_popup(self):
     self.progress_label.grid(row=0, column=0, padx=10, pady=(5, 0))
     
     # Create the progress bar widget
-    self.progress_bar = customtkinter.CTkProgressBar(self.progress_frame, orientation="horizontal", width=300, mode="determinate", corner_radius=CORNER_RADIUS / 2)
+    self.progress_bar = customtkinter.CTkProgressBar(self.progress_frame, orientation="horizontal", width=300, mode="determinate", corner_radius=CORNER_RADIUS / 2, indeterminate_speed=0.2)
     self.progress_bar.set(0)
     self.progress_bar.grid(row=2, column=0, padx=10, pady=10)
     

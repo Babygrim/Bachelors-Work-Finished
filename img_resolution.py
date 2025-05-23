@@ -8,8 +8,6 @@ import os
 import numpy as np
 import cv2
 from constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
-from skimage import restoration
-from skimage import img_as_float
 from image_tiling import *
 from img_manipulation import resize_image
 from constants import ROOT_DIR
@@ -18,13 +16,6 @@ from constants import ROOT_DIR
 def multisampling(input_img, progress_bar_queue, sample_rate):
     """
     Apply multisampling (supersampling) to a single image for edge smoothing.
-    
-    Args:
-        input_image (Image.Image): The input image as a PIL Image.
-        sample_rate (int): The sampling rate (e.g., 2, 4, 8). Higher values mean better quality but slower processing.
-
-    Returns:
-        Image.Image: The antialiased output image.
     """
     input_image = input_img
     sample_rate = int(sample_rate)
@@ -42,10 +33,8 @@ def multisampling(input_img, progress_bar_queue, sample_rate):
 
     return output_image
 
-
 ######### REAL ESRGAN UPSCALING
 def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restoration, upscale_factor):
-    
     model = model
     weights_path = ROOT_DIR + f'/weights/{model}.pth'
     if not os.path.exists(weights_path):
@@ -59,7 +48,7 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
     upscale_factor = int(upscale_factor)
     outscale_factor = 1 / upscale_factor if keep_size else 1
     
-    # Create the ESRGAN model
+    # create ESRGAN model
     model = RRDBNet(
         num_in_ch=3,
         num_out_ch=3,
@@ -69,7 +58,7 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         scale=upscale_factor
     )
     
-    # Initialize RealESRGAN with AMD-compatible device
+    # init RealESRGAN
     upscaler_ESRGAN = RealESRGANer(
         scale=upscale_factor,
         model_path=weights_path,
@@ -114,39 +103,8 @@ def upscale_cv2(input, progress_bar_queue, sample_rate):
     image =  np.array(input)
     samples = int(sample_rate)
     
-    for _ in range(samples):
+    for _ in range(2, samples):
         image = cv2.pyrUp(image)
     image = Image.fromarray(image)
     
-    return image
-    
-
-############ IMAGE DENOISING PILLOW
-
-def denoise_image_pil(input, progress_bar_queue):
-    """
-    Applies denoising to the input PIL image using non-local means denoising.
-    
-    Args:
-        input_image (Image.Image): The input image as a PIL Image.
-    
-    Returns:
-        Image.Image: The denoised output image as a PIL Image.
-    """
-    # Step 1: Convert the PIL image to a NumPy array
-    image_np = input
-
-    # Step 2: Convert the image to float (required by skimage)
-    image_float = img_as_float(image_np)
-
-    # Step 3: Apply denoising (non-local means)
-    denoised_image = restoration.denoise_nl_means(image_float, 
-                                                  patch_size=2, 
-                                                  patch_distance=3)
-
-    # Step 4: Convert the denoised image back to uint8 for saving
-    denoised_image_uint8 = np.uint8(denoised_image * 255)
-
-    # Step 5: Convert the result back to a PIL Image and return it
-    image = Image.fromarray(denoised_image_uint8)
     return image

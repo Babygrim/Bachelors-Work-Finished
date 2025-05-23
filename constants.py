@@ -7,7 +7,7 @@ DEFAULT_SLIDER_VALUES = {
     "Contrast": 100,
     "Sharpness": 100,
     "Blur": 0,
-    "Deblur": 2,
+    "Deblur": 200,
     "AI_UPSCALE": 200,
 }
 
@@ -22,7 +22,10 @@ DEFAULT_SWITCH_METHOD_OFF_VALUE = False
 
 ICONS_DIRECTORY = "icons"
 
-FUNC_EXCEPTIONS = ['upscale_image', 'deblur_image_ESRGAN']
+FUNC_EXCEPTIONS = ['upscale_image', 
+                   'deblur_image_ESRGAN', 
+                   'denoise_image', 
+                   'deblur_image']
 
 
 # APP

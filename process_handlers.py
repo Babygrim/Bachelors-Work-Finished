@@ -5,18 +5,25 @@ from image_tiling import *
 import inspect
 from constants import IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP, FUNC_EXCEPTIONS
 
+progress_bar_mode_indeterminate = True
+
 def update_progress(self, progress):
+    global progress_bar_mode_indeterminate
+    self.change_progress_state("determinate")
+    progress_bar_mode_indeterminate = False
     if self.progress_label.winfo_exists() and self.progress_bar.winfo_exists():
         self.progress_label.configure(text=f"Progress: {int(progress)}%")
         self.progress_bar.set(int(progress) / 100)
 
 def check_progress(self):
+    global progress_bar_mode_indeterminate
     try:
         progress = self.progress_queue.get_nowait()
         self.update_progress(progress)
     except Empty:
-        pass
-    
+        if progress_bar_mode_indeterminate:
+            self.change_progress_state("indeterminate")
+
     self.root.after(1, self.check_progress)
 
 def cancel_progress(self):
@@ -80,6 +87,7 @@ def run_processing_pipeline(self, function, values):
             args_to_text += f"\n{param.name}: {values[index]}"
             
         self.change_progress_status_text(f"Running: {function.__name__}{args_to_text}")
+        self.progress_label.configure(text="Processing...")
         
         self.popup.update_idletasks()
         self.popup.update()
