@@ -2,8 +2,7 @@ from PIL import Image
 from realesrganer_my import RealESRGANer
 from gfpganer_my import GFPGANer
 from rrdbnet_arch import RRDBNet
-import torch_directml
-import torch
+from constants import DEVICE
 import os
 import numpy as np
 import cv2
@@ -40,11 +39,6 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
     if not os.path.exists(weights_path):
         raise FileNotFoundError(f"Weight file not found: {weights_path}")
 
-    if torch_directml.is_available():
-        device = torch_directml.device()
-    else:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     upscale_factor = int(upscale_factor)
     outscale_factor = 1 / upscale_factor if keep_size else 1
     
@@ -63,7 +57,7 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         scale=upscale_factor,
         model_path=weights_path,
         model=model,
-        device=device
+        device=DEVICE
     )
     
     if face_restoration:

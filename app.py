@@ -185,8 +185,8 @@ class App():
         self.gamma_selector.pack(fill="x", padx=5, pady=5)
         
         # color slider
-        color_bound_variable = tk.IntVar(value=DEFAULT_SLIDER_VALUES["Color"])
-        self.cl_slider = StyledCTkLabel(self.module_toolframe, text="Color (1.00)")
+        color_bound_variable = tk.IntVar(value=DEFAULT_SLIDER_VALUES["Saturation"])
+        self.cl_slider = StyledCTkLabel(self.module_toolframe, text="Saturation (1.00)")
         self.color_selector = customtkinter.CTkSlider(self.module_toolframe, from_=0, to=500,  orientation=tk.HORIZONTAL, width=150, variable=color_bound_variable)
         self.color_selector.configure(command = lambda value: self.modify_image(values={
                                                                                 'switch': [],
@@ -194,7 +194,7 @@ class App():
                                                                                 'checkbox': []
                                                                                 }, 
                                                                                 function=ImageEnhance.Color, 
-                                                                                text_value=("Color", self.cl_slider), 
+                                                                                text_value=("Saturation", self.cl_slider), 
                                                                                 type="slider"))
         self.color_selector.set(DEFAULT_SLIDER_VALUES["Color"])
         self.cl_slider.pack(fill="x", padx=5, pady=(10, 0))
@@ -303,7 +303,7 @@ class App():
                                             'checkbox': []
                                             }, {
                                             'switch': [],
-                                            'slider': [("Color", self.cl_slider)],
+                                            'slider': [("Saturation", self.cl_slider)],
                                             'checkbox': []
                                             }),
             

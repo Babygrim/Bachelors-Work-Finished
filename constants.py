@@ -1,4 +1,6 @@
 import os
+import torch
+import torch_directml
 
 # UI
 DEFAULT_SLIDER_VALUES = {
@@ -38,3 +40,7 @@ DEBUG=False
 # UPSCALING
 IMAGE_TILE_SIZE = 128
 IMAGE_TILE_OVERLAP = 60
+if torch_directml.is_available():
+    DEVICE = torch_directml.device()
+else:
+    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

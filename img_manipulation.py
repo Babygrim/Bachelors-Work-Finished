@@ -15,14 +15,14 @@ def display_image(callback):
                 current_photo_object = self.image_history[self.current_image_id]
                 current_func = current_photo_object['used_function']
 
-                if current_func != kwargs['function'] and kwargs['function']:
-                    current_func = current_photo_object['used_function'] = kwargs['function']                  
-
+                if current_func != kwargs['function'] and kwargs['function']:     
                     # handling applied methods
                     
                     if kwargs['function'].__module__ == 'img_scaling':
-                        current_photo_object['main_frame'] = self.apply_settings(self.current_image_id, reference='actual_frame', function_check=current_func)
+                        current_func = kwargs['function']
+                        current_photo_object['main_frame'] = self.apply_settings(self.current_image_id, reference='actual_frame')
                     else:
+                        current_func = current_photo_object['used_function'] = kwargs['function']
                         current_photo_object['main_frame'], _ = self.resize_image(current_photo_object['actual_frame'], 
                                                                             new_width=current_photo_object['actual_frame'].width * current_photo_object['scale'],
                                                                             new_height=current_photo_object['actual_frame'].height * current_photo_object['scale'])
