@@ -17,7 +17,8 @@ def update_scroll_region(self):
     bbox = self.canvas.bbox(self.image_container)
     if bbox:
         self.canvas.config(scrollregion=bbox)
-      
+
+# this is not used at the moment   
 def zoom_slider(self, value):
     factor = 1 + self.zoom_factor if value / 100 > self.image_history[self.current_image_id]['scale'] else 1 - self.zoom_factor
     now = time.time()
@@ -25,12 +26,10 @@ def zoom_slider(self, value):
     checker1 = value / 100 != self.scale_slider.cget('to') / 100 and value / 100 != self.scale_slider.cget('from_') / 100
     checker2 = now - self.last_zoomed > 0.05
     
-    if not checker2:
-        self.root.after_cancel(self.zoom_slider)
-    
     if checker1 and checker2:
         coords = self.canvas.coords(self.image_container)
         self.modify_image(values={}, function=lambda in_image: self.apply_zoom(in_image, coords[0], coords[1], factor), text_value="", type=None)
+######
     
 def zoom(self, event):
     # Determine zoom direction
@@ -39,10 +38,17 @@ def zoom(self, event):
     
     checker1 = self.image_history[self.current_image_id]['scale'] < self.scale_slider.cget('to') / 100 and event.delta > 1
     checker2 = self.image_history[self.current_image_id]['scale'] > self.scale_slider.cget('from_') / 100 and event.delta < 1
-    checker3 = now - self.last_zoomed > 0.05
+    checker3 = now - self.last_zoomed > 50
     
-    if (checker1 or checker2) and checker3:
+    def caller_func():
         self.modify_image(values={}, function=lambda in_image: self.apply_zoom(in_image, event.x, event.y, factor), text_value="", type=None)
+    
+    if not checker3:
+        self.root.after_cancel(caller_func)
+    
+    if (checker1 or checker2):
+        self.root.after(50, caller_func)
+        
 
 def apply_zoom(self, in_image, center_x, center_y, factor):
     bbox = self.canvas.bbox(self.image_container)

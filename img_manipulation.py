@@ -1,7 +1,7 @@
 from math import ceil
 from PIL import ImageTk, Image
 from _tkinter import TclError
-from constants import DEFAULT_VALUE_SELECTION_METHODS
+from constants import DEFAULT_SLIDER_VALUES
 
 #effects management and feed to canvas
 def display_image(callback):
@@ -13,21 +13,21 @@ def display_image(callback):
              
             try:
                 current_photo_object = self.image_history[self.current_image_id]
-                current_func = current_photo_object['used_function']
+                current_func = current_photo_object['used_function'] or self.resize_image
 
                 if current_func != kwargs['function'] and kwargs['function']:     
                     # handling applied methods
                     
                     if kwargs['function'].__module__ == 'img_scaling':
                         current_func = kwargs['function']
-                        current_photo_object['main_frame'] = self.apply_settings(self.current_image_id, reference='actual_frame')
+                        self.modified_image = current_photo_object['main_frame'] = self.apply_settings(self.current_image_id, reference='actual_frame')
                     else:
                         current_func = current_photo_object['used_function'] = kwargs['function']
                         current_photo_object['main_frame'], _ = self.resize_image(current_photo_object['actual_frame'], 
                                                                             new_width=current_photo_object['actual_frame'].width * current_photo_object['scale'],
-                                                                            new_height=current_photo_object['actual_frame'].height * current_photo_object['scale'])
-                        
-                    self.modified_image = self.apply_settings(self.current_image_id, reference='main_frame', function_check=current_func)
+                                                                                new_height=current_photo_object['actual_frame'].height * current_photo_object['scale'])
+
+                        self.modified_image = self.apply_settings(self.current_image_id, reference='main_frame', function_check=current_func)
             except KeyError:
                 pass
 
@@ -123,8 +123,8 @@ def apply_settings(self, frame_id: str, reference: str, function_check = None, m
             slider_methods = setting.get('slider_methods', dict())
             switch_methods = setting.get('switch_methods', dict())
 
-            for _, (effect_class, controllers, _) in slider_methods.items():
-                if function_check != effect_class:
+            for name, (effect_class, controllers, _) in slider_methods.items():
+                if function_check != effect_class and controllers['slider'][0][0].get() != DEFAULT_SLIDER_VALUES[name]:
                 
                     if effect_class.__module__ == "PIL.ImageEnhance":
                         effect_enhancer = effect_class(image_to_apply)

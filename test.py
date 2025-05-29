@@ -391,71 +391,175 @@
 
 # main_window.mainloop()
 
-import cv2
-import numpy as np
-from PIL import Image
+# import cv2
+# import numpy as np
+# from PIL import Image
 
-def add_gaussian_noise(image, mean=0, sigma=25):
-    noise = np.random.normal(mean, sigma, image.shape).astype(np.float32)
-    noisy_img = cv2.add(image.astype(np.float32), noise)
-    return np.clip(noisy_img, 0, 255).astype(np.uint8)
+# def add_gaussian_noise(image, mean=0, sigma=25):
+#     noise = np.random.normal(mean, sigma, image.shape).astype(np.float32)
+#     noisy_img = cv2.add(image.astype(np.float32), noise)
+#     return np.clip(noisy_img, 0, 255).astype(np.uint8)
 
-def psnr(target, ref):
-    target_data = target.astype(np.float32)
-    ref_data = ref.astype(np.float32)
-    mse = np.mean((ref_data - target_data) ** 2)
-    if mse == 0:
-        return float('inf')
-    return 20 * np.log10(255.0 / np.sqrt(mse))
+# def psnr(target, ref):
+#     target_data = target.astype(np.float32)
+#     ref_data = ref.astype(np.float32)
+#     mse = np.mean((ref_data - target_data) ** 2)
+#     if mse == 0:
+#         return float('inf')
+#     return 20 * np.log10(255.0 / np.sqrt(mse))
 
-def denoise_methods(noisy_img):
-    methods = {}
+# def denoise_methods(noisy_img):
+#     methods = {}
 
-    # 1. Gaussian Blur
-    methods['GaussianBlur'] = cv2.GaussianBlur(noisy_img, (5, 5), 0)
+#     # 1. Gaussian Blur
+#     methods['GaussianBlur'] = cv2.GaussianBlur(noisy_img, (5, 5), 0)
 
-    # 2. Median Blur
-    methods['MedianBlur'] = cv2.medianBlur(noisy_img, 5)
+#     # 2. Median Blur
+#     methods['MedianBlur'] = cv2.medianBlur(noisy_img, 5)
 
-    # 3. Bilateral Filter
-    methods['BilateralFilter'] = cv2.bilateralFilter(noisy_img, 9, 75, 75)
+#     # 3. Bilateral Filter
+#     methods['BilateralFilter'] = cv2.bilateralFilter(noisy_img, 9, 75, 75)
 
-    # 4. Non-Local Means
-    methods['FastNlMeans'] = cv2.fastNlMeansDenoisingColored(noisy_img, None, 10, 10, 6, 18)
+#     # 4. Non-Local Means
+#     methods['FastNlMeans'] = cv2.fastNlMeansDenoisingColored(noisy_img, None, 10, 10, 6, 18)
 
-    return methods
+#     return methods
 
-def evaluate_methods(original, denoised_dict):
-    scores = {}
-    for method, output in denoised_dict.items():
-        score = psnr(original, output)
-        scores[method] = score
-    return scores
+# def evaluate_methods(original, denoised_dict):
+#     scores = {}
+#     for method, output in denoised_dict.items():
+#         score = psnr(original, output)
+#         scores[method] = score
+#     return scores
 
-def main():
-    # Load original image
-    original = Image.open("./TEST_IMAGES/car-denoise.webp")
-    original = np.array(original)
+# def main():
+#     # Load original image
+#     original = Image.open("./TEST_IMAGES/car-denoise.webp")
+#     original = np.array(original)
 
-    # Denoise using different methods
-    denoised_results = denoise_methods(original)
+#     # Denoise using different methods
+#     denoised_results = denoise_methods(original)
 
-    # Evaluate and find the best one
-    psnr_scores = evaluate_methods(original, denoised_results)
-    best_method = min(psnr_scores, key=psnr_scores.get)
-    best_image = denoised_results[best_method]
+#     # Evaluate and find the best one
+#     psnr_scores = evaluate_methods(original, denoised_results)
+#     best_method = min(psnr_scores, key=psnr_scores.get)
+#     best_image = denoised_results[best_method]
 
-    # Output
-    print(f"Best method: {best_method} with PSNR = {psnr_scores[best_method]:.2f} dB")
-    cv2.imwrite("noisy_image.jpg", original)
-    cv2.imwrite(f"best_denoised_{best_method}.jpg", best_image)
+#     # Output
+#     print(f"Best method: {best_method} with PSNR = {psnr_scores[best_method]:.2f} dB")
+#     cv2.imwrite("noisy_image.jpg", original)
+#     cv2.imwrite(f"best_denoised_{best_method}.jpg", best_image)
 
-    # Optional: Show results
-    cv2.imshow("Original", original)
-    cv2.imshow("Noisy", original)
-    cv2.imshow("Best Denoised", best_image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+#     # Optional: Show results
+#     cv2.imshow("Original", original)
+#     cv2.imshow("Noisy", original)
+#     cv2.imshow("Best Denoised", best_image)
+#     cv2.waitKey(0)
+#     cv2.destroyAllWindows()
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
+
+# from PIL import Image
+# import matplotlib.pyplot as plt
+# import torch
+# import torchvision.transforms as T
+# import torch.nn.functional as F
+
+# # Load the image
+# image_path = "./TEST_IMAGES/low_res_image.jpg"
+# image = Image.open(image_path).convert("RGB")
+
+# # Resize for simplicity (smaller size for visualization)
+# image = image.resize((64, 64))  # downscale for easier tiling
+
+# # Convert to tensor
+# transform = T.ToTensor()
+# img_tensor = transform(image).unsqueeze(0)  # shape: (1, 3, H, W)
+
+# # Define tile size and padding
+# tile_size = 32
+# tile_pad = 8
+
+# # Extract tile from top-left corner
+# tile = img_tensor[:, :, 0:tile_size, 0:tile_size]
+
+# # Apply reflect padding
+# padded_tile = F.pad(tile, (tile_pad, tile_pad, tile_pad, tile_pad), mode='reflect')
+
+# # Convert tensors back to images for visualization
+# to_pil = T.ToPILImage()
+# tile_img = to_pil(tile.squeeze(0))
+# padded_tile_img = to_pil(padded_tile.squeeze(0))
+
+# # Plot original tile and padded tile
+# fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+# axs[0].imshow(tile_img)
+# axs[0].set_title("Original Tile (32×32)")
+# axs[0].axis("off")
+
+# axs[1].imshow(padded_tile_img)
+# axs[1].set_title("Padded Tile (Reflect, 48×48)")
+# axs[1].axis("off")
+
+# plt.tight_layout()
+# plt.show()
+
+# import numpy as np
+# from PIL import Image
+# import matplotlib.pyplot as plt
+# import matplotlib.patches as patches
+
+
+# def tile_image_with_overlap(image: Image.Image, tile_size: int, overlap: int):
+#     width, height = image.size
+#     stride = tile_size - overlap
+
+#     tiles = []
+#     positions = []
+#     valid_sizes = []
+
+#     for y in range(0, height, stride):
+#         for x in range(0, width, stride):
+#             x_end = min(x + tile_size, width)
+#             y_end = min(y + tile_size, height)
+#             real_w = x_end - x
+#             real_h = y_end - y
+
+#             tile = image.crop((x, y, x_end, y_end))
+#             padded_tile = Image.new("RGB", (tile_size, tile_size))
+#             padded_tile.paste(tile, (0, 0))
+
+#             tiles.append(padded_tile)
+#             positions.append((x, y))
+#             valid_sizes.append((real_w, real_h))
+
+#     return tiles, positions, valid_sizes, (width, height)
+
+
+# def visualize_tiling(image: Image.Image, tile_size: int, overlap: int):
+#     _, positions, _, _ = tile_image_with_overlap(image, tile_size, overlap)
+
+#     fig, ax = plt.subplots(figsize=(10, 10))
+#     ax.imshow(image)
+
+#     for (x, y) in positions:
+#         rect = patches.Rectangle((x, y), tile_size, tile_size, linewidth=2,
+#                                  edgecolor='red', facecolor='none', alpha=0.5)
+#         ax.add_patch(rect)
+
+#     ax.set_title(f'Розбиття зображення на фрагменти з розміром {tile_size} і перекриттям {overlap}')
+#     plt.axis('off')
+#     plt.tight_layout()
+#     plt.show()
+
+
+# if __name__ == "__main__":
+#     # Заміни шлях до зображення на свій файл
+#     image_path = "./TEST_IMAGES/low_res_image.jpg"
+#     tile_size = 128
+#     overlap = 64
+
+#     img = Image.open(image_path).convert("RGB")
+#     visualize_tiling(img, tile_size, overlap)
+

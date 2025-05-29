@@ -63,7 +63,9 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
     if face_restoration:
         upscaler_GFPGAN = GFPGANer(
             upscale=upscale_factor,
-            bg_upsampler=upscaler_ESRGAN
+            bg_upsampler=upscaler_ESRGAN,
+            arch='clean', # clean, bilinear, original, RestoreFormer
+            # device=DEVICE, #unable to use AMD GPU, because face comes out distorted.
         )
         
         final_image = upscaler_GFPGAN.enhance(np.array(input_image), progress_queue=progress_bar_queue)
@@ -85,7 +87,6 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
                                                 IMAGE_TILE_SIZE,
                                                 IMAGE_TILE_OVERLAP, 
                                                 upscale_factor)
-    
     if outscale_factor < 1:
         final_image, _ = resize_image(None, photo_image=final_image, new_height=final_image.height * outscale_factor, new_width=final_image.width * outscale_factor)
         

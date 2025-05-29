@@ -5,6 +5,7 @@ import os
 import queue
 import threading
 import torch
+from realesrgan import RealESRGANer
 from basicsr.utils.download_util import load_file_from_url
 from torch.nn import functional as F
 
@@ -161,7 +162,6 @@ class RealESRGANer():
                         output_tile = self.model(input_tile)
                 except RuntimeError as error:
                     print('Error', error)
-                #print(f'\tTile {tile_idx}/{tiles_x * tiles_y}')
 
                 # output tile area on total image
                 output_start_x = input_start_x * self.scale
