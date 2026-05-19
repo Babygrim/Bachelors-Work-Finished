@@ -1,5 +1,5 @@
 import glfw
-from OpenGL.GL import *
+from OpenGL.GL import *  # noqa: F403
 from PIL import Image
 import numpy as np
 
@@ -121,7 +121,7 @@ def glfw_openGL_anti_aliasing(input, progress_bar_queue, sample_rate):
 
     # === Save to file ===
     image = Image.frombytes("RGBA", (img_width, img_height), data)
-    image = image.transpose(Image.FLIP_TOP_BOTTOM).convert("RGB")
+    image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM).convert("RGB")
     
     glfw.terminate()
 

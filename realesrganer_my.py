@@ -5,7 +5,7 @@ import os
 import queue
 import threading
 import torch
-from realesrgan import RealESRGANer
+# from realesrgan import RealESRGANer
 from basicsr.utils.download_util import load_file_from_url
 from torch.nn import functional as F
 
@@ -153,7 +153,6 @@ class RealESRGANer():
                 # input tile dimensions
                 input_tile_width = input_end_x - input_start_x
                 input_tile_height = input_end_y - input_start_y
-                tile_idx = y * tiles_x + x + 1
                 input_tile = self.img[:, :, input_start_y_pad:input_end_y_pad, input_start_x_pad:input_end_x_pad]
 
                 # upscale tile

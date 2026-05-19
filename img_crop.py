@@ -3,7 +3,7 @@ def interrupt_crop(self, event):
         self.canvas.delete(self.figure)
         self.figure = None
         self.canvas.configure(cursor="arrow")
-    except:
+    except Exception:
         pass
     
 def start_selection(self, event):

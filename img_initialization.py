@@ -1,4 +1,4 @@
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 import os
 from PIL import Image
 from app_popups import show_warning_popup

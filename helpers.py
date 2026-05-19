@@ -1,4 +1,4 @@
-from constants import *
+from constants import DEFAULT_SLIDER_VALUES, DEFAULT_VALUE_SELECTION_METHODS, DEFAULT_SWITCH_METHOD_OFF_VALUE
 import tkinter as tk
 from PIL import ImageTk
 
@@ -144,7 +144,7 @@ def load_unchanged_image(self):
     # some shenanigans :)
     self.image_history[self.current_image_id]["used_function"] = None
     
-    #self.update_scale(scale * 100)
+    self.update_scale(scale * 100)
     self.reset_module_tools(self.current_app_module)
         
 def disable_app_tools(self):

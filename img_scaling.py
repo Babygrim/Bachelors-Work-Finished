@@ -34,20 +34,20 @@ def zoom_slider(self, value):
 def zoom(self, event):
     # Determine zoom direction
     factor = 1 + self.zoom_factor if event.delta > 0 else 1 - self.zoom_factor
-    now = time.time()
-    
+
     checker1 = self.image_history[self.current_image_id]['scale'] < self.scale_slider.cget('to') / 100 and event.delta > 1
     checker2 = self.image_history[self.current_image_id]['scale'] > self.scale_slider.cget('from_') / 100 and event.delta < 1
-    checker3 = now - self.last_zoomed > 50
-    
+
     def caller_func():
+        self._zoom_after_id = None
         self.modify_image(values={}, function=lambda in_image: self.apply_zoom(in_image, event.x, event.y, factor), text_value="", type=None)
-    
-    if not checker3:
-        self.root.after_cancel(caller_func)
-    
-    if (checker1 or checker2):
-        self.root.after(50, caller_func)
+
+    if self._zoom_after_id is not None:
+        self.root.after_cancel(self._zoom_after_id)
+        self._zoom_after_id = None
+
+    if checker1 or checker2:
+        self._zoom_after_id = self.root.after(50, caller_func)
         
 
 def apply_zoom(self, in_image, center_x, center_y, factor):

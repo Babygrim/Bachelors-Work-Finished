@@ -1,8 +1,7 @@
 import tkinter as tk
 import ttkbootstrap as ttk
-from ttkbootstrap.constants import *
+from ttkbootstrap.constants import *  # noqa: F403
 from PIL import ImageEnhance, ImageFilter, Image
-from queue import Queue
 import img_crop
 import img_history
 import img_initialization
@@ -11,12 +10,19 @@ import img_effects
 import img_resolution
 import app_popups
 import app_modes
-import img_anti_aliasing
 import img_scaling
 import process_handlers
-from constants import *
+from constants import (
+    DEFAULT_SLIDER_VALUES, DEFAULT_RESOLUTION_VALUES,
+    DEFAULT_SWITCH_METHOD_ON_VALUE, DEFAULT_SWITCH_METHOD_OFF_VALUE,
+    ICONS_DIRECTORY, DEFAULT_IMAGE_ID, ROOT_DIR, DEFAULT_LOAD_MODULE, DEBUG,
+)
 import helpers
-from styles import *
+from styles import (
+    DEFAULT_FONT, DEFAULT_FONT_SIZE, CORNER_RADIUS,
+    DEFAULT_COLOR, DEFAULT_HOVER_COLOR,
+    StyledCTkButton, StyledCTkLabel, StyledCTkRadio, set_styles,
+)
 import time
 import os
 import customtkinter
@@ -45,6 +51,7 @@ class App():
         self.canvas_popup_menu = None
         self.last_zoomed = time.time()
         self.zoom_factor = 0.15
+        self._zoom_after_id = None
         
         self.app_modules = {
             "Image_Effects": {"loader": self.build_Image_Effects_module, "state": True},

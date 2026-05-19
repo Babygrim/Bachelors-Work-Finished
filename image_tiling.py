@@ -7,7 +7,7 @@ def tile_image_with_overlap(image: Image.Image, tile_size: int, overlap: int):
 
     tiles = []
     positions = []
-    valid_sizes = []  # Track real image size before padding
+    valid_sizes = []  # track real image size before padding
 
     for y in range(0, height, stride):
         for x in range(0, width, stride):
@@ -32,17 +32,17 @@ def stitch_tiles_with_blending(tiles, positions, valid_sizes, original_size, til
     final_image = np.zeros((out_h, out_w, 3), dtype=np.float32)
     weight_map = np.zeros((out_h, out_w, 3), dtype=np.float32)
 
-    for tile, (x, y), (valid_w, valid_h) in zip(tiles, positions, valid_sizes):
+    for index, (tile, (x, y), (valid_w, valid_h)) in enumerate(zip(tiles, positions, valid_sizes)):
         scaled_w = valid_w * scale
         scaled_h = valid_h * scale
 
-        # Resize and crop to match actual content size
-        tile = tile.resize((tile_size * scale, tile_size * scale), Image.BICUBIC)
+        # resize and crop to match actual content size
+        tile = tile.resize((tile_size * scale, tile_size * scale), Image.Resampling.BICUBIC)
         tile_np = np.array(tile, dtype=np.float32)[:scaled_h, :scaled_w]
 
         alpha = np.ones_like(tile_np, dtype=np.float32)
 
-        # Smooth blend on overlapping edges
+        # smooth blend on overlapping edges
         fade = overlap * scale
         for i in range(fade):
             weight = (i + 1) / (fade + 1)

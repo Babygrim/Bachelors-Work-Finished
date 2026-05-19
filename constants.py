@@ -34,7 +34,7 @@ FUNC_EXCEPTIONS = ['upscale_image',
 DEFAULT_IMAGE_ID = None
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_LOAD_MODULE = 'Image_Effects'
-DEBUG=False
+DEBUG=True
 
 
 # UPSCALING

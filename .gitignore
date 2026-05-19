@@ -4,4 +4,5 @@ Research/
 TEST_IMAGES/
 weights/
 gfpgan/
+.claude
 *.pyc

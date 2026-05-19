@@ -7,7 +7,7 @@ import os
 import numpy as np
 import cv2
 from constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
-from image_tiling import *
+from image_tiling import tile_image_with_overlap, stitch_tiles_with_blending
 from img_manipulation import resize_image
 from constants import ROOT_DIR
 
@@ -22,7 +22,7 @@ def multisampling(input_img, progress_bar_queue, sample_rate):
     # Step 1: Upscale the image
     width, height = input_image.size
     upscale_width, upscale_height = width * sample_rate, height * sample_rate
-    upscaled_image = input_image.resize((upscale_width, upscale_height), Image.NEAREST)
+    upscaled_image = input_image.resize((upscale_width, upscale_height), Image.Resampling.NEAREST)
 
     # Step 2: Apply a smoothing filter (optional, to mimic multisampling operations)
     # upscaled_image = upscaled_image.filter(ImageFilter.SMOOTH)

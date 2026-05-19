@@ -1,7 +1,7 @@
 from multiprocessing import Process, Queue
 from queue import Empty
 from styles import StyledCTkLabel
-from image_tiling import *
+from image_tiling import tile_image_with_overlap, stitch_tiles_with_blending
 import inspect
 from constants import IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP, FUNC_EXCEPTIONS
 

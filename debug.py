@@ -4,7 +4,7 @@ from styles import DEFAULT_FONT, DEFAULT_FONT_SIZE
 def build_overlay(self):
     try:
         self.overlay.destroy()
-    except:
+    except Exception:
         pass
     self.overlay = customtkinter.CTkFrame(self.canvas_wrapper, width=120, height=30, corner_radius=8, bg_color='transparent')
     self.overlay.place(x=15, y=15)

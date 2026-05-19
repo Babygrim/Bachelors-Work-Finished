@@ -1,7 +1,6 @@
 from math import ceil
 from PIL import ImageTk, Image
 from _tkinter import TclError
-from constants import DEFAULT_SLIDER_VALUES
 
 #effects management and feed to canvas
 def display_image(callback):
@@ -124,7 +123,7 @@ def apply_settings(self, frame_id: str, reference: str, function_check = None, m
             switch_methods = setting.get('switch_methods', dict())
 
             for name, (effect_class, controllers, _) in slider_methods.items():
-                if function_check != effect_class and controllers['slider'][0][0].get() != DEFAULT_SLIDER_VALUES[name]:
+                if function_check != effect_class:
                 
                     if effect_class.__module__ == "PIL.ImageEnhance":
                         effect_enhancer = effect_class(image_to_apply)

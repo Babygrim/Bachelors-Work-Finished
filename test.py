@@ -563,3 +563,67 @@
 #     img = Image.open(image_path).convert("RGB")
 #     visualize_tiling(img, tile_size, overlap)
 
+import numpy as np
+from PIL import Image
+import matplotlib.pyplot as plt
+
+def apply_fade_to_tile(tile, valid_w, valid_h, tile_size, overlap, scale=1):
+    # Масштабовані розміри
+    scaled_w = valid_w * scale
+    scaled_h = valid_h * scale
+
+    # Resize
+    tile = tile.resize((tile_size * scale, tile_size * scale), Image.Resampling.BICUBIC)
+    tile_np = np.array(tile, dtype=np.float32)[:scaled_h, :scaled_w]
+    
+    # Альфа-маска
+    alpha = np.ones_like(tile_np, dtype=np.float32)
+
+    fade = overlap * scale
+    for i in range(fade):
+        weight = (i + 1) / (fade + 1)
+        if i < scaled_h:
+            alpha[i, :, :] *= weight  # верх
+            alpha[-(i + 1), :, :] *= weight  # низ
+        if i < scaled_w:
+            alpha[:, i, :] *= weight  # ліво
+            alpha[:, -(i + 1), :] *= weight  # право
+
+    faded_tile = tile_np * alpha
+    faded_tile = np.clip(faded_tile, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(faded_tile)
+
+# ---------- Параметри ----------
+tile_size = 128
+overlap = 32
+image_path = "./TEST_IMAGES/low_res_image.jpg"  # Замінити на свій файл
+
+# ---------- Завантаження зображення ----------
+image = Image.open(image_path).convert("RGB")
+width, height = image.size
+
+# ---------- Вибір одного тайла ----------
+box = (0, 0, min(tile_size, width), min(tile_size, height))
+tile = image.crop(box)
+valid_w = box[2] - box[0]
+valid_h = box[3] - box[1]
+
+# ---------- Застосування згасання ----------
+faded_tile = apply_fade_to_tile(tile, valid_w, valid_h, tile_size, overlap)
+
+# ---------- Відображення ----------
+plt.figure(figsize=(8, 4))
+plt.subplot(1, 2, 1)
+plt.title("Оригінальна плитка")
+plt.imshow(tile)
+plt.axis("off")
+
+plt.subplot(1, 2, 2)
+plt.title("З fade ефектом")
+plt.imshow(faded_tile)
+plt.axis("off")
+
+plt.tight_layout()
+plt.show()
+

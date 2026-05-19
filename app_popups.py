@@ -1,7 +1,6 @@
 import customtkinter
 import tkinter as tk
 from styles import (StyledCTkButton, StyledCTkLabel,
-                    DEFAULT_FONT, DEFAULT_FONT_SIZE,
                     CORNER_RADIUS)
 
 #### THIS IS NOT USED YET

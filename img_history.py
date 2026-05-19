@@ -2,7 +2,7 @@ import tkinter as tk
 from PIL import ImageTk
 import string
 import random
-from constants import *
+from constants import DEFAULT_VALUE_SELECTION_METHODS, DEBUG
 
 def generate_id():
     return ''.join(random.choices(string.ascii_uppercase + string.digits + string.ascii_lowercase, k=12))
@@ -81,16 +81,17 @@ def save_history(self, module):
 def load_history(self, event, new_history_id, initial):
     '''If initial is set to True - load new image and load default settings,
        else - load new image and load new settings'''  
+    new_history_object = self.image_history[new_history_id]
+    get_Label_object = new_history_object["history_frame_object"]
+    
     if self.current_image_id != new_history_id:
-        new_history_object = self.image_history[new_history_id]
-        get_Label_object = new_history_object["history_frame_object"]
 
         # save old - potentially, modified image and it's settings
         self.save_history(self.current_app_module)
         
         if initial:
             #reset settings if image is not first
-            if self.current_image_id != None:
+            if self.current_image_id is not None:
                 self.reset_module_tools(self.current_app_module)
             
             #load new history Image
@@ -122,7 +123,7 @@ def load_history(self, event, new_history_id, initial):
             self.build_overlay()
             self.update_overlay_text()
     
-    if event == True:
+    if event:
         self.change_items_state(self.photo_frame_extra.winfo_children(), 'disable')
         self.change_items_state([get_Label_object], 'active')
     

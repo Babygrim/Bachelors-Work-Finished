@@ -2,7 +2,7 @@ from PIL import Image, ImageOps
 import numpy as np
 import cv2
 from skimage.restoration import richardson_lucy
-from skimage import img_as_float, img_as_ubyte
+from skimage.util import img_as_float, img_as_ubyte
 
 #color inversion
 def invert_image_colors(input_img, values): 
