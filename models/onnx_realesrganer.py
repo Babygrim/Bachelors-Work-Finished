@@ -180,6 +180,7 @@ class OnnxRealESRGANer:
         for idx, (x0, y0, x1, y1, x0p, y0p, x1p, y1p) in enumerate(tile_metas):
             prefetch_thread.join()
             tile_in = prefetch_result[0]
+            assert tile_in is not None
 
             ph, pw = y1p - y0p, x1p - x0p
             is_interior = (ph == io_pad_h and pw == io_pad_w)
@@ -192,11 +193,12 @@ class OnnxRealESRGANer:
                 prefetch_thread.start()
 
             if binding is not None and is_interior:
+                assert _buf_in is not None and _buf_out is not None
                 _buf_in[0] = tile_in[0]
                 self.session.run_with_iobinding(binding)
                 tile_out = _buf_out[0]
             else:
-                tile_out = self.session.run([self.output_name], {self.input_name: tile_in})[0][0]
+                tile_out = self.session.run([self.output_name], {self.input_name: tile_in})[0][0]  # ty: ignore[not-subscriptable]
 
             ox0, oy0 = x0 * scale, y0 * scale
             ox1, oy1 = x1 * scale, y1 * scale

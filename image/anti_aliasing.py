@@ -1,5 +1,5 @@
 import glfw
-from OpenGL.GL import *  # noqa: F403
+from OpenGL.GL import glEnable, glViewport, glGenTextures, glBindTexture, glTexImage2D, glTexParameteri
 from PIL import Image
 import numpy as np
 
