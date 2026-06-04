@@ -11,6 +11,12 @@ from core.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
 from image.manipulation import resize_image
 from core.constants import ROOT_DIR
 
+try:
+    from models.onnx_realesrganer import OnnxRealESRGANer
+    _ONNX_AVAILABLE = True
+except ImportError:
+    _ONNX_AVAILABLE = False
+
 
 def multisampling(input_img, progress_bar_queue, sample_rate):
     """
@@ -41,39 +47,53 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
 
     upscale_factor = int(upscale_factor)
     outscale_factor = 1 / upscale_factor if keep_size else 1
-    
-    # create ESRGAN model
-    model = RRDBNet(
-        num_in_ch=3,
-        num_out_ch=3,
-        num_feat=64,
-        num_block=23,
-        num_grow_ch=32,
-        scale=upscale_factor
-    )
-    
-    # init RealESRGAN
-    upscaler_ESRGAN = RealESRGANer(
-        scale=upscale_factor,
-        model_path=weights_path,
-        model=model,
-        tile=IMAGE_TILE_SIZE,
-        tile_pad=IMAGE_TILE_OVERLAP,
-        device=DEVICE,
-    )
-    
+
     start_time = time()
     if face_restoration:
+        # Face path: PyTorch upsampler required as bg_upsampler for GFPGAN
+        model = RRDBNet(
+            num_in_ch=3, num_out_ch=3, num_feat=64,
+            num_block=23, num_grow_ch=32, scale=upscale_factor
+        )
+        upscaler_ESRGAN = RealESRGANer(
+            scale=upscale_factor,
+            model_path=weights_path,
+            model=model,
+            tile=IMAGE_TILE_SIZE,
+            tile_pad=IMAGE_TILE_OVERLAP,
+            device=DEVICE,
+        )
         upscaler_GFPGAN = GFPGANer(
             upscale=upscale_factor,
             bg_upsampler=upscaler_ESRGAN,
-            arch='clean', # clean, bilinear, original, RestoreFormer
-            # device=DEVICE, #unable to use AMD GPU, because face comes out distorted.
+            arch='clean',
         )
-        
         final_image = upscaler_GFPGAN.enhance(np.array(input_image), progress_queue=progress_bar_queue)
         final_image = Image.fromarray(final_image)
+    elif _ONNX_AVAILABLE:
+        upscaler = OnnxRealESRGANer(
+            scale=upscale_factor,
+            pth_path=weights_path,
+            tile=IMAGE_TILE_SIZE,
+            tile_pad=IMAGE_TILE_OVERLAP,
+        )
+        img_bgr = cv2.cvtColor(np.array(input_image), cv2.COLOR_RGB2BGR)
+        output_bgr = upscaler.enhance(img_bgr, progress_queue=progress_bar_queue)
+        final_image = Image.fromarray(cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB))
     else:
+        # Fallback: PyTorch path
+        model = RRDBNet(
+            num_in_ch=3, num_out_ch=3, num_feat=64,
+            num_block=23, num_grow_ch=32, scale=upscale_factor
+        )
+        upscaler_ESRGAN = RealESRGANer(
+            scale=upscale_factor,
+            model_path=weights_path,
+            model=model,
+            tile=IMAGE_TILE_SIZE,
+            tile_pad=IMAGE_TILE_OVERLAP,
+            device=DEVICE,
+        )
         img_bgr = cv2.cvtColor(np.array(input_image), cv2.COLOR_RGB2BGR)
         output_bgr = upscaler_ESRGAN.enhance(img_bgr, progress_queue=progress_bar_queue)
         final_image = Image.fromarray(cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB))
