@@ -12,6 +12,5 @@ PyOpenGL==3.1.7
 scikit-image==0.25.2
 scipy==1.13.1
 torch==2.4.1
-torch-directml==0.2.5.dev240914
 torchvision==0.19.1
 ttkbootstrap==1.10.1

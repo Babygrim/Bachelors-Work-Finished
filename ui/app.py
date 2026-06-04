@@ -421,7 +421,7 @@ class App():
                                                         state=READONLY)
         
         def change_models_list(combobox, variable, switch):
-            values_list = list(item.removesuffix('.pth') for item in filter(lambda key: key.startswith(str(variable.get())), os.listdir(ROOT_DIR + "/weights")))
+            values_list = list(item.removesuffix('.pth').removesuffix('.onnx') for item in filter(lambda key: key.startswith(str(variable.get())), os.listdir(ROOT_DIR + "/weights")))
             combobox.configure(values=values_list)
             combobox.set(values_list[0])
             if variable.get() == 1:

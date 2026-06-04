@@ -51,11 +51,14 @@ def _export_to_onnx(pth_path, onnx_path, scale, num_block=23, fp16=False):
 
 
 def _export_both(pth_path, scale, num_block=23):
-    """Export a RRDBNet checkpoint to both FP32 and FP16 ONNX files."""
+    """Export a RRDBNet checkpoint to FP32 + FP16 ONNX files (skips precisions already present)."""
     base = os.path.splitext(pth_path)[0]
     for fp16 in (False, True):
         suffix = '_fp16' if fp16 else '_fp32'
-        _export_to_onnx(pth_path, base + suffix + '.onnx', scale, num_block=num_block, fp16=fp16)
+        out_path = base + suffix + '.onnx'
+        if os.path.exists(out_path):
+            continue
+        _export_to_onnx(pth_path, out_path, scale, num_block=num_block, fp16=fp16)
 
 
 class OnnxRealESRGANer:
@@ -79,20 +82,20 @@ class OnnxRealESRGANer:
         self.tile_pad = tile_pad
 
         base = os.path.splitext(pth_path)[0]
-        fp32_path = base + '_fp32.onnx'
-        fp16_path = base + '_fp16.onnx'
+        fp_path = base + '.onnx'
 
-        # Export both precisions if the base fp32 doesn't exist yet
-        if not os.path.exists(fp32_path):
-            print("ONNX models not found — exporting fp32 + fp16 (one-time, may take a moment)...")
+
+        # Export any missing precision (fp32 and/or fp16) from the .pth checkpoint
+        if not os.path.exists(fp_path):
+            print(f"ONNX models missing for {os.path.basename(pth_path)} — exporting (one-time)...")
             _export_both(pth_path, scale, num_block=num_block)
 
         # Prefer fp16 when available
-        if os.path.exists(fp16_path):
-            onnx_path = fp16_path
+        if 'fp16' in str(fp_path) and os.path.exists(fp_path):
+            onnx_path = fp_path
             self.np_dtype = np.float16
         else:
-            onnx_path = fp32_path
+            onnx_path = fp_path
             self.np_dtype = np.float32
 
         sess_opts = ort.SessionOptions()
@@ -111,16 +114,18 @@ class OnnxRealESRGANer:
         warmup = np.zeros((1, 3, 64, 64), dtype=self.np_dtype)
         self.session.run([self.output_name], {self.input_name: warmup})
 
-    def enhance(self, img_bgr, progress_queue=None):
+    def enhance(self, img_bgr, progress_queue=None, outscale=None):
         """Upscale a BGR uint8 image using tiled ONNX inference.
 
         Args:
             img_bgr: HWC uint8 numpy array in BGR colour order.
             progress_queue: optional multiprocessing.Queue for progress updates (0–100).
+            outscale: optional final scale (if differs from model scale, result is resized).
 
         Returns:
             HWC uint8 numpy array in BGR colour order.
         """
+        h_in, w_in = img_bgr.shape[:2]
         # BGR uint8 → RGB float CHW in [0, 1]
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         img_chw = np.ascontiguousarray(np.transpose(img_rgb, (2, 0, 1))).astype(self.np_dtype)
@@ -207,4 +212,11 @@ class OnnxRealESRGANer:
 
         # RGB float32 CHW [0, 1] → BGR uint8 HWC
         output_rgb = np.transpose(np.clip(output, 0, 1), (1, 2, 0))
-        return cv2.cvtColor((output_rgb * 255.0).round().astype(np.uint8), cv2.COLOR_RGB2BGR)
+        result = cv2.cvtColor((output_rgb * 255.0).round().astype(np.uint8), cv2.COLOR_RGB2BGR)
+
+        if outscale is not None and float(outscale) != float(self.scale):
+            target_w = int(round(w_in * float(outscale)))
+            target_h = int(round(h_in * float(outscale)))
+            result = cv2.resize(result, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
+
+        return result

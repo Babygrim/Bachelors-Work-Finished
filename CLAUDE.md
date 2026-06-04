@@ -20,7 +20,7 @@ No build step required. Requires the model weights in `weights/` directory (not 
 pip install -r requirements.txt
 ```
 
-**Note:** `torch-directml` is for AMD GPU support on Windows. On NVIDIA, regular `torch` with CUDA suffices. Device selection is automatic via `constants.DEVICE`.
+**Note:** Upscaling runs through ONNX Runtime with the DirectML execution provider (`onnxruntime-directml`) — works on AMD/NVIDIA/Intel GPUs on Windows. PyTorch is used only for the one-time `.pth` -> `.onnx` export and for the GFPGAN face-restoration path (`constants.DEVICE` resolves to CUDA if available, else CPU).
 
 ## Architecture
 
@@ -64,22 +64,24 @@ Every image operation that produces a new image calls `App.build_history()`. Eac
 
 `App.load_history(id)` restores both the image and all module control states.
 
-### Tiling Strategy (`image_tiling.py`, `realesrganer_my.py`)
+### Tiling Strategy (`image/tiling.py`, `models/onnx_realesrganer.py`)
 
-Large images are split into 128×128 tiles with 60px overlap, processed independently (manages VRAM), then stitched with fade-weight blending on overlapping edges. The upscale factor is applied correctly during stitching. Tile size and overlap are in `constants.py`.
+Large images are split into tiles, processed independently (manages VRAM), then stitched. The ONNX path uses fixed-size IOBinding buffers for interior tiles and a CPU prefetch thread to overlap data prep with GPU inference. Tile size and overlap defaults live in `core/constants.py`.
 
 ### Canvas Interaction
 
-- **Shift+MouseWheel**: Zoom (10–500% range, implemented in `img_scaling.py`)
+- **Shift+MouseWheel**: Zoom (10–500% range, implemented in `image/scaling.py`)
 - **Shift+Click+Drag**: Pan image
-- **Ctrl+Click+Drag**: Rectangle crop selection (`img_crop.py`)
+- **Ctrl+Click+Drag**: Rectangle crop selection (`image/crop.py`)
 
 ### AI Models
 
-- `realesrganer_my.py` — custom RealESRGAN with tiling; wraps `rrdbnet_arch.RRDBNet`
-- `gfpganer_my.py` — GFPGAN wrapper supporting 3 architecture variants (clean, bilinear, original)
-- `arch_util.py` — shared PyTorch layer utilities (weight init, DCN, optical flow ops)
-- Weights loaded from `weights/` at inference time; device placement handled by `constants.DEVICE`
+- `models/onnx_realesrganer.py` — **primary** upscaling path. ONNX Runtime + DirectML, tiled inference, FP16 preferred. On first use it exports the `.pth` weight to both FP32 and FP16 ONNX next to the original file.
+- `models/realesrganer.py` — PyTorch RealESRGAN, kept solely as the GFPGAN background upsampler.
+- `models/gfpganer.py` — GFPGAN wrapper for the optional face-restoration toggle.
+- `models/rrdbnet_arch.py` — RRDBNet definition (used by both ONNX export and the PyTorch path).
+- `models/arch_util.py` — shared PyTorch layer utilities.
+- Weights loaded from `weights/` at inference time.
 
 ### Key Helper Patterns
 
@@ -103,6 +105,5 @@ weights/
 
 ## Known Architecture Notes
 
-- `test.py` contains mostly commented-out experimental SRCNN code; it is not part of the active application
 - `app.py` is large (~629 lines) and serves as both controller and view — new UI features go here
 - `process_handlers.py` uses `multiprocessing` (not threading) because PyTorch releases the GIL inconsistently; the subprocess approach is intentional
