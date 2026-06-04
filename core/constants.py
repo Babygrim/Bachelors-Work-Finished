@@ -38,8 +38,8 @@ DEBUG=True
 
 
 # UPSCALING
-IMAGE_TILE_SIZE = 512
-IMAGE_TILE_OVERLAP = 30
+IMAGE_TILE_SIZE = 768
+IMAGE_TILE_OVERLAP = 0
 if torch_directml.is_available():
     DEVICE = torch_directml.device()
 else:

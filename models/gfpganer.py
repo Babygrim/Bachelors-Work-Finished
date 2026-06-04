@@ -14,7 +14,7 @@ from gfpgan.archs.gfpganv1_clean_arch import GFPGANv1Clean
 from image.tiling import tile_image_with_overlap, stitch_tiles_with_blending
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# from constants import IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP
+
 
 class GFPGANer():
     """Helper for restoration with GFPGAN.

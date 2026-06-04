@@ -251,7 +251,7 @@ class RealESRGANer():
     def enhance_batch(self, imgs, batch_size=4, progress_queue=None):
         """Process a list of same-sized RGB uint8 numpy arrays in batches.
 
-        Tiles from PIL are all padded to IMAGE_TILE_SIZE x IMAGE_TILE_SIZE so they
+        Tiles from PIL are all padded to a fixed size so they
         can be stacked into a single (B, C, H, W) tensor and run through the model
         in one forward pass, letting the GPU parallelize across its compute units.
         Falls back to smaller batches automatically on OOM.

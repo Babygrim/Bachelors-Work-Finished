@@ -3,7 +3,7 @@ from queue import Empty
 from ui.styles import StyledCTkLabel
 from image.tiling import tile_image_with_overlap, stitch_tiles_with_blending
 import inspect
-from core.constants import IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP, FUNC_EXCEPTIONS
+from core.constants import FUNC_EXCEPTIONS, IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP
 
 progress_bar_mode_indeterminate = True
 
@@ -47,9 +47,9 @@ def image_processing_wrapper(func, input_img, queue, progress_queue, func_args):
                 progress_queue.put(((index + 1) / len(tiles)) * 100)
                 
             # Stitch all upscaled tiles
-            processed_image = stitch_tiles_with_blending(tiles, 
-                                                         positions, 
-                                                         valid_sizes, 
+            processed_image = stitch_tiles_with_blending(tiles,
+                                                         positions,
+                                                         valid_sizes,
                                                          original_size,
                                                          IMAGE_TILE_SIZE,
                                                          IMAGE_TILE_OVERLAP)

@@ -1,5 +1,6 @@
 import math
 import os
+import threading
 
 import cv2
 import numpy as np
@@ -72,7 +73,7 @@ class OnnxRealESRGANer:
         num_block (int): Number of RRDB blocks (23 standard, 6 anime).
     """
 
-    def __init__(self, scale, pth_path, tile=512, tile_pad=30, num_block=23):
+    def __init__(self, scale, pth_path, tile=768, tile_pad=0, num_block=23):
         self.scale = scale
         self.tile_size = tile
         self.tile_pad = tile_pad
@@ -129,64 +130,81 @@ class OnnxRealESRGANer:
         pad   = self.tile_pad
         scale = self.scale
         out_H, out_W = H * scale, W * scale
-
         output = np.zeros((C, out_H, out_W), dtype=np.float32)
 
-        # Try IOBinding on the first interior tile (fixed padded size).
-        # If DML doesn't support it we fall back to session.run() silently.
         io_pad_h = tile + 2 * pad
         io_pad_w = tile + 2 * pad
-        io_out_h = io_pad_h * scale
-        io_out_w = io_pad_w * scale
 
-        binding = None
+        # IOBinding: fixed-size buffers for the standard (non-edge) tile.
+        # Edge tiles may be smaller and fall back to session.run().
+        binding = _buf_in = _buf_out = None
         try:
             binding = self.session.io_binding()
             _buf_in  = np.zeros((1, C, io_pad_h, io_pad_w), dtype=self.np_dtype)
-            _buf_out = np.zeros((1, C, io_out_h, io_out_w), dtype=np.float32)
+            _buf_out = np.zeros((1, C, io_pad_h * scale, io_pad_w * scale), dtype=self.np_dtype)
             binding.bind_cpu_input(self.input_name, _buf_in)
             binding.bind_cpu_output(self.output_name, _buf_out)
         except Exception:
-            binding = None  # fall back to session.run
+            binding = None
 
         tiles_x = math.ceil(W / tile)
         tiles_y = math.ceil(H / tile)
         total   = tiles_x * tiles_y
         done    = 0
 
+        # Pre-compute all tile coordinates
+        tile_metas = []
         for ty in range(tiles_y):
             for tx in range(tiles_x):
                 x0, y0 = tx * tile, ty * tile
                 x1, y1 = min(x0 + tile, W), min(y0 + tile, H)
                 x0p, y0p = max(x0 - pad, 0), max(y0 - pad, 0)
                 x1p, y1p = min(x1 + pad, W), min(y1 + pad, H)
+                tile_metas.append((x0, y0, x1, y1, x0p, y0p, x1p, y1p))
 
-                ph = y1p - y0p
-                pw = x1p - x0p
-                is_interior = (ph == io_pad_h and pw == io_pad_w)
+        # Prefetch: slice the next tile's numpy data on CPU while the GPU runs the current tile.
+        prefetch_result = [None]
 
-                if binding is not None and is_interior:
-                    # IOBinding path: write directly into the pre-allocated buffer
-                    _buf_in[0] = img_chw[:, y0p:y1p, x0p:x1p]
-                    self.session.run_with_iobinding(binding)
-                    tile_out = _buf_out[0]
-                else:
-                    tile_in = np.ascontiguousarray(img_chw[:, y0p:y1p, x0p:x1p])[np.newaxis]
-                    tile_out = self.session.run([self.output_name], {self.input_name: tile_in})[0][0]
+        def _prefetch(x0p, y0p, x1p, y1p):
+            prefetch_result[0] = np.ascontiguousarray(img_chw[:, y0p:y1p, x0p:x1p])[np.newaxis]
 
-                ox0, oy0 = x0 * scale, y0 * scale
-                ox1, oy1 = x1 * scale, y1 * scale
-                vx0 = (x0 - x0p) * scale
-                vy0 = (y0 - y0p) * scale
-                vx1 = vx0 + (x1 - x0) * scale
-                vy1 = vy0 + (y1 - y0) * scale
+        x0, y0, x1, y1, x0p, y0p, x1p, y1p = tile_metas[0]
+        prefetch_thread = threading.Thread(target=_prefetch, args=(x0p, y0p, x1p, y1p), daemon=True)
+        prefetch_thread.start()
 
-                output[:, oy0:oy1, ox0:ox1] = tile_out[:, vy0:vy1, vx0:vx1]
+        for idx, (x0, y0, x1, y1, x0p, y0p, x1p, y1p) in enumerate(tile_metas):
+            prefetch_thread.join()
+            tile_in = prefetch_result[0]
 
-                done += 1
-                if progress_queue:
-                    progress_queue.put((done / total) * 100)
+            ph, pw = y1p - y0p, x1p - x0p
+            is_interior = (ph == io_pad_h and pw == io_pad_w)
 
-        # RGB float32 CHW [0,1] → BGR uint8 HWC
+            if idx + 1 < total:
+                nx0, ny0, nx1, ny1, nx0p, ny0p, nx1p, ny1p = tile_metas[idx + 1]
+                prefetch_thread = threading.Thread(
+                    target=_prefetch, args=(nx0p, ny0p, nx1p, ny1p), daemon=True
+                )
+                prefetch_thread.start()
+
+            if binding is not None and is_interior:
+                _buf_in[0] = tile_in[0]
+                self.session.run_with_iobinding(binding)
+                tile_out = _buf_out[0]
+            else:
+                tile_out = self.session.run([self.output_name], {self.input_name: tile_in})[0][0]
+
+            ox0, oy0 = x0 * scale, y0 * scale
+            ox1, oy1 = x1 * scale, y1 * scale
+            vx0 = (x0 - x0p) * scale
+            vy0 = (y0 - y0p) * scale
+            vx1 = vx0 + (x1 - x0) * scale
+            vy1 = vy0 + (y1 - y0) * scale
+            output[:, oy0:oy1, ox0:ox1] = tile_out[:, vy0:vy1, vx0:vx1]
+
+            done += 1
+            if progress_queue:
+                progress_queue.put((done / total) * 100)
+
+        # RGB float32 CHW [0, 1] → BGR uint8 HWC
         output_rgb = np.transpose(np.clip(output, 0, 1), (1, 2, 0))
         return cv2.cvtColor((output_rgb * 255.0).round().astype(np.uint8), cv2.COLOR_RGB2BGR)
