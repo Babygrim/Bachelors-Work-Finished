@@ -6,7 +6,8 @@ from core.constants import DEVICE
 import os
 import numpy as np
 import cv2
-from core.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE, TILE_BATCH_SIZE
+from time import time
+from core.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
 from image.tiling import tile_image_with_overlap, stitch_tiles_with_blending
 from image.manipulation import resize_image
 from core.constants import ROOT_DIR
@@ -60,6 +61,7 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         device=DEVICE
     )
     
+    start_time = time()
     if face_restoration:
         upscaler_GFPGAN = GFPGANer(
             upscale=upscale_factor,
@@ -72,14 +74,13 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         final_image = Image.fromarray(final_image)
     else:
         tiles, positions, valid_sizes, original_size = tile_image_with_overlap(input_image, IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP)
-
-        tile_arrays = [np.array(t) for t in tiles]
-        upscaled_arrays = upscaler_ESRGAN.enhance_batch(
-            tile_arrays,
-            batch_size=TILE_BATCH_SIZE,
-            progress_queue=progress_bar_queue
-        )
-        upscaled_tiles = [Image.fromarray(a) for a in upscaled_arrays]
+    
+        upscaled_tiles = []
+        for i, tile in enumerate(tiles):
+            upscaled_tile = upscaler_ESRGAN.enhance(np.array(tile))
+            upscaled_tiles.append(Image.fromarray(upscaled_tile))
+            if progress_bar_queue:
+                progress_bar_queue.put(((i + 1) / len(tiles)) * 100)
 
         final_image = stitch_tiles_with_blending(upscaled_tiles, 
                                                 positions, 
@@ -90,7 +91,8 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
                                                 upscale_factor)
     if outscale_factor < 1:
         final_image, _ = resize_image(None, photo_image=final_image, new_height=final_image.height * outscale_factor, new_width=final_image.width * outscale_factor)
-        
+    
+    print(f"Upscaling completed in {time() - start_time:.2f} seconds.")
     return final_image
 
 ########## OPENCV UPSCALING
