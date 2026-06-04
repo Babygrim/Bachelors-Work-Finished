@@ -32,14 +32,15 @@ FUNC_EXCEPTIONS = ['upscale_image',
 
 # APP
 DEFAULT_IMAGE_ID = None
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_LOAD_MODULE = 'Image_Effects'
 DEBUG=True
 
 
 # UPSCALING
 IMAGE_TILE_SIZE = 128
-IMAGE_TILE_OVERLAP = 60
+IMAGE_TILE_OVERLAP = 30
+TILE_BATCH_SIZE = 8  # number of tiles per GPU forward pass (reduce if OOM)
 if torch_directml.is_available():
     DEVICE = torch_directml.device()
 else:

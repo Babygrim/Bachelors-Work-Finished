@@ -1,5 +1,5 @@
 import customtkinter
-from styles import DEFAULT_FONT, DEFAULT_FONT_SIZE
+from ui.styles import DEFAULT_FONT, DEFAULT_FONT_SIZE
 
 def build_overlay(self):
     try:

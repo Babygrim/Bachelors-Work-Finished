@@ -1,5 +1,5 @@
 import ttkbootstrap as ttk
-from app import App
+from ui.app import App
 
 
 if __name__ == "__main__":

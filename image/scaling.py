@@ -1,4 +1,4 @@
-from constants import DEBUG
+from core.constants import DEBUG
 import time
 
 def reset_scale(self):

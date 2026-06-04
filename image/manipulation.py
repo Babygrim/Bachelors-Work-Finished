@@ -17,7 +17,7 @@ def display_image(callback):
                 if current_func != kwargs['function'] and kwargs['function']:     
                     # handling applied methods
                     
-                    if kwargs['function'].__module__ == 'img_scaling':
+                    if kwargs['function'].__module__ == 'image.scaling':
                         current_func = kwargs['function']
                         self.modified_image = current_photo_object['main_frame'] = self.apply_settings(self.current_image_id, reference='actual_frame')
                     else:

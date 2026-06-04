@@ -11,7 +11,7 @@ from torchvision.transforms.functional import normalize
 from gfpgan.archs.gfpgan_bilinear_arch import GFPGANBilinear
 from gfpgan.archs.gfpganv1_arch import GFPGANv1
 from gfpgan.archs.gfpganv1_clean_arch import GFPGANv1Clean
-from image_tiling import tile_image_with_overlap, stitch_tiles_with_blending
+from image.tiling import tile_image_with_overlap, stitch_tiles_with_blending
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # from constants import IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP

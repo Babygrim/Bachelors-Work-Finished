@@ -1,7 +1,7 @@
 from tkinter import filedialog
 import os
 from PIL import Image
-from app_popups import show_warning_popup
+from ui.app_popups import show_warning_popup
 
 # choose and place image on canvas
 def get_image(self):

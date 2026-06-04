@@ -2,7 +2,7 @@ import tkinter as tk
 from PIL import ImageTk
 import string
 import random
-from constants import DEFAULT_VALUE_SELECTION_METHODS, DEBUG
+from core.constants import DEFAULT_VALUE_SELECTION_METHODS, DEBUG
 
 def generate_id():
     return ''.join(random.choices(string.ascii_uppercase + string.digits + string.ascii_lowercase, k=12))

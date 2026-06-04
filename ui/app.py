@@ -2,23 +2,23 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *  # noqa: F403
 from PIL import ImageEnhance, ImageFilter, Image
-import img_crop
-import img_history
-import img_initialization
-import img_manipulation
-import img_effects
-import img_resolution
-import app_popups
-import app_modes
-import img_scaling
-import process_handlers
-from constants import (
+from image import crop as img_crop
+from image import history as img_history
+from image import initialization as img_initialization
+from image import manipulation as img_manipulation
+from image import effects as img_effects
+from image import resolution as img_resolution
+from ui import app_popups
+from ui import app_modes
+from image import scaling as img_scaling
+from core import process_handlers
+from core.constants import (
     DEFAULT_SLIDER_VALUES, DEFAULT_RESOLUTION_VALUES,
     DEFAULT_SWITCH_METHOD_ON_VALUE, DEFAULT_SWITCH_METHOD_OFF_VALUE,
     ICONS_DIRECTORY, DEFAULT_IMAGE_ID, ROOT_DIR, DEFAULT_LOAD_MODULE, DEBUG,
 )
-import helpers
-from styles import (
+from core import helpers
+from ui.styles import (
     DEFAULT_FONT, DEFAULT_FONT_SIZE, CORNER_RADIUS,
     DEFAULT_COLOR, DEFAULT_HOVER_COLOR,
     StyledCTkButton, StyledCTkLabel, StyledCTkRadio, set_styles,
@@ -652,7 +652,7 @@ App.update_progress = process_handlers.update_progress
 #select app mode dev or prod
 if DEBUG:
     App.appMODE = app_modes.turnDEBUGmodeOn
-    import debug
+    from . import debug
     App.update_overlay_text = debug.update_overlay_text
     App.build_overlay = debug.build_overlay
 else:

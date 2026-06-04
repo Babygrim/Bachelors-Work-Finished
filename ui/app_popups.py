@@ -1,7 +1,7 @@
 import customtkinter
 import tkinter as tk
-from styles import (StyledCTkButton, StyledCTkLabel,
-                    CORNER_RADIUS)
+from ui.styles import (StyledCTkButton, StyledCTkLabel,
+                       CORNER_RADIUS)
 
 #### THIS IS NOT USED YET
 def add_popup_menu_items(self, menu, suboptions_objects):

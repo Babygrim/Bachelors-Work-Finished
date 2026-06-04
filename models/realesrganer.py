@@ -191,6 +191,51 @@ class RealESRGANer():
         return self.output
 
     @torch.no_grad()
+    def enhance_batch(self, imgs, batch_size=4, progress_queue=None):
+        """Process a list of same-sized RGB uint8 numpy arrays in batches.
+
+        Tiles from PIL are all padded to IMAGE_TILE_SIZE x IMAGE_TILE_SIZE so they
+        can be stacked into a single (B, C, H, W) tensor and run through the model
+        in one forward pass, letting the GPU parallelize across its compute units.
+        Falls back to smaller batches automatically on OOM.
+        """
+        results = []
+        total = len(imgs)
+        i = 0
+        while i < total:
+            batch_imgs = imgs[i:i + batch_size]
+            try:
+                tensors = []
+                for img in batch_imgs:
+                    img_f = img.astype(np.float32) / 255.0
+                    img_f = img_f[:, :, ::-1].copy()  # RGB→BGR to match enhance() channel convention
+                    tensors.append(torch.from_numpy(np.transpose(img_f, (2, 0, 1))))
+
+                batch = torch.stack(tensors).to(self.device)  # (B, C, H, W)
+                if self.half:
+                    batch = batch.half()
+
+                output_batch = self.model(batch)  # (B, C, H*scale, W*scale)
+
+                output_np = output_batch.float().clamp_(0, 1).cpu().numpy()
+                for out in output_np:
+                    out = out[[2, 1, 0], :, :]    # BGR→RGB
+                    out = np.transpose(out, (1, 2, 0))  # (H, W, C)
+                    results.append((out * 255.0).round().astype(np.uint8))
+
+                if progress_queue:
+                    progress_queue.put(((i + len(batch_imgs)) / total) * 100)
+
+                i += batch_size
+            except RuntimeError as e:
+                if 'out of memory' in str(e).lower() and batch_size > 1:
+                    batch_size = max(1, batch_size // 2)
+                else:
+                    raise
+
+        return results
+
+    @torch.no_grad()
     def enhance(self, img, outscale=None, alpha_upsampler='realesrgan'):
         h_input, w_input = img.shape[0:2]
         # img: numpy
