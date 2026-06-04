@@ -116,7 +116,7 @@ class RealESRGANer():
         # model inference
         self.output = self.model(self.img)
 
-    def tile_process(self):
+    def tile_process(self, progress_queue=None):
         """It will first crop input images to tiles, and then process each tile.
         Finally, all the processed tiles are merged into one images.
 
@@ -131,6 +131,8 @@ class RealESRGANer():
         self.output = self.img.new_zeros(output_shape)
         tiles_x = math.ceil(width / self.tile_size)
         tiles_y = math.ceil(height / self.tile_size)
+        total_tiles = tiles_x * tiles_y
+        processed_tiles = 0
 
         # loop over all tiles
         for y in range(tiles_y):
@@ -179,6 +181,10 @@ class RealESRGANer():
                             output_start_x:output_end_x] = output_tile[:, :, output_start_y_tile:output_end_y_tile,
                                                                        output_start_x_tile:output_end_x_tile]
 
+                processed_tiles += 1
+                if progress_queue:
+                    progress_queue.put((processed_tiles / total_tiles) * 100)
+
     def post_process(self):
         # remove extra pad
         if self.mod_scale is not None:
@@ -189,6 +195,57 @@ class RealESRGANer():
             _, _, h, w = self.output.size()
             self.output = self.output[:, :, 0:h - self.pre_pad * self.scale, 0:w - self.pre_pad * self.scale]
         return self.output
+
+    @torch.no_grad()
+    def _tile_process_cpu(self, img_chw, progress_queue=None):
+        """CPU-side tiling: one tile at a time on GPU — no OOM on large images.
+        Only the tile slice is transferred to the GPU; output accumulates on CPU.
+
+        Args:
+            img_chw: float32 CPU tensor (C, H, W), values in [0, 1]
+        Returns:
+            float32 CPU tensor (C, out_H, out_W), values in [0, 1]
+        """
+        C, H, W = img_chw.shape
+        tile = self.tile_size
+        pad = self.tile_pad
+        scale = self.scale
+        out_H, out_W = H * scale, W * scale
+
+        output = torch.zeros(C, out_H, out_W, dtype=torch.float32)
+
+        tiles_x = math.ceil(W / tile)
+        tiles_y = math.ceil(H / tile)
+        total = tiles_x * tiles_y
+        done = 0
+
+        for ty in range(tiles_y):
+            for tx in range(tiles_x):
+                x0, y0 = tx * tile, ty * tile
+                x1, y1 = min(x0 + tile, W), min(y0 + tile, H)
+                x0p, y0p = max(x0 - pad, 0), max(y0 - pad, 0)
+                x1p, y1p = min(x1 + pad, W), min(y1 + pad, H)
+
+                tile_in = img_chw[:, y0p:y1p, x0p:x1p].unsqueeze(0).to(self.device)
+                if self.half:
+                    tile_in = tile_in.half()
+
+                tile_out = self.model(tile_in).float().cpu().squeeze(0)
+
+                ox0, oy0 = x0 * scale, y0 * scale
+                ox1, oy1 = x1 * scale, y1 * scale
+                vx0 = (x0 - x0p) * scale
+                vy0 = (y0 - y0p) * scale
+                vx1 = vx0 + (x1 - x0) * scale
+                vy1 = vy0 + (y1 - y0) * scale
+
+                output[:, oy0:oy1, ox0:ox1] = tile_out[:, vy0:vy1, vx0:vx1]
+
+                done += 1
+                if progress_queue:
+                    progress_queue.put((done / total) * 100)
+
+        return output
 
     @torch.no_grad()
     def enhance_batch(self, imgs, batch_size=4, progress_queue=None):
@@ -236,7 +293,7 @@ class RealESRGANer():
         return results
 
     @torch.no_grad()
-    def enhance(self, img, outscale=None, alpha_upsampler='realesrgan'):
+    def enhance(self, img, outscale=None, alpha_upsampler='realesrgan', progress_queue=None):
         h_input, w_input = img.shape[0:2]
         # img: numpy
         img = img.astype(np.float32)
@@ -261,28 +318,34 @@ class RealESRGANer():
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         # ------------------- process image (without the alpha channel) ------------------- #
-        self.pre_process(img)
         if self.tile_size > 0:
-            self.tile_process()
+            img_t = torch.from_numpy(np.transpose(img, (2, 0, 1))).float()
+            output_t = self._tile_process_cpu(img_t, progress_queue)
+            output_img = output_t.clamp_(0, 1).numpy()
+            output_img = np.transpose(output_img[[2, 1, 0], :, :], (1, 2, 0))
         else:
+            self.pre_process(img)
             self.process()
-        output_img = self.post_process()
-        output_img = output_img.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-        output_img = np.transpose(output_img[[2, 1, 0], :, :], (1, 2, 0))
+            output_img = self.post_process()
+            output_img = output_img.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+            output_img = np.transpose(output_img[[2, 1, 0], :, :], (1, 2, 0))
         if img_mode == 'L':
             output_img = cv2.cvtColor(output_img, cv2.COLOR_BGR2GRAY)
 
         # ------------------- process the alpha channel if necessary ------------------- #
         if img_mode == 'RGBA':
             if alpha_upsampler == 'realesrgan':
-                self.pre_process(alpha)
                 if self.tile_size > 0:
-                    self.tile_process()
+                    alpha_t = torch.from_numpy(np.transpose(alpha, (2, 0, 1))).float()
+                    alpha_out_t = self._tile_process_cpu(alpha_t)
+                    output_alpha = alpha_out_t.clamp_(0, 1).numpy()
+                    output_alpha = np.transpose(output_alpha[[2, 1, 0], :, :], (1, 2, 0))
                 else:
+                    self.pre_process(alpha)
                     self.process()
-                output_alpha = self.post_process()
-                output_alpha = output_alpha.data.squeeze().float().cpu().clamp_(0, 1).numpy()
-                output_alpha = np.transpose(output_alpha[[2, 1, 0], :, :], (1, 2, 0))
+                    output_alpha = self.post_process()
+                    output_alpha = output_alpha.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+                    output_alpha = np.transpose(output_alpha[[2, 1, 0], :, :], (1, 2, 0))
                 output_alpha = cv2.cvtColor(output_alpha, cv2.COLOR_BGR2GRAY)
             else:  # use the cv2 resize for alpha channel
                 h, w = alpha.shape[0:2]

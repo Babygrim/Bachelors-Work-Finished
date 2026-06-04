@@ -2,6 +2,8 @@ __pycache__/
 anti-aliasing/
 Research/
 TEST_IMAGES/
+*ruff*
+.venv
 weights/
 gfpgan/
 .claude

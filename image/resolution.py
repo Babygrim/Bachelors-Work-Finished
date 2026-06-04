@@ -8,7 +8,6 @@ import numpy as np
 import cv2
 from time import time
 from core.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
-from image.tiling import tile_image_with_overlap, stitch_tiles_with_blending
 from image.manipulation import resize_image
 from core.constants import ROOT_DIR
 
@@ -58,7 +57,9 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         scale=upscale_factor,
         model_path=weights_path,
         model=model,
-        device=DEVICE
+        tile=IMAGE_TILE_SIZE,
+        tile_pad=IMAGE_TILE_OVERLAP,
+        device=DEVICE,
     )
     
     start_time = time()
@@ -73,22 +74,9 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         final_image = upscaler_GFPGAN.enhance(np.array(input_image), progress_queue=progress_bar_queue)
         final_image = Image.fromarray(final_image)
     else:
-        tiles, positions, valid_sizes, original_size = tile_image_with_overlap(input_image, IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP)
-    
-        upscaled_tiles = []
-        for i, tile in enumerate(tiles):
-            upscaled_tile = upscaler_ESRGAN.enhance(np.array(tile))
-            upscaled_tiles.append(Image.fromarray(upscaled_tile))
-            if progress_bar_queue:
-                progress_bar_queue.put(((i + 1) / len(tiles)) * 100)
-
-        final_image = stitch_tiles_with_blending(upscaled_tiles, 
-                                                positions, 
-                                                valid_sizes, 
-                                                original_size, 
-                                                IMAGE_TILE_SIZE,
-                                                IMAGE_TILE_OVERLAP, 
-                                                upscale_factor)
+        img_bgr = cv2.cvtColor(np.array(input_image), cv2.COLOR_RGB2BGR)
+        output_bgr = upscaler_ESRGAN.enhance(img_bgr, progress_queue=progress_bar_queue)
+        final_image = Image.fromarray(cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB))
     if outscale_factor < 1:
         final_image, _ = resize_image(None, photo_image=final_image, new_height=final_image.height * outscale_factor, new_width=final_image.width * outscale_factor)
     

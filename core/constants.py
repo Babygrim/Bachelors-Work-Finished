@@ -38,9 +38,8 @@ DEBUG=True
 
 
 # UPSCALING
-IMAGE_TILE_SIZE = 128
+IMAGE_TILE_SIZE = 512
 IMAGE_TILE_OVERLAP = 30
-TILE_BATCH_SIZE = 8  # number of tiles per GPU forward pass (reduce if OOM)
 if torch_directml.is_available():
     DEVICE = torch_directml.device()
 else:
