@@ -3,7 +3,6 @@ from pathlib import Path
 from threading import Lock
 from typing import Annotated
 
-import cv2
 import numpy as np
 import onnxruntime as ort
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
