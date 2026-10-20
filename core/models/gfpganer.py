@@ -11,10 +11,8 @@ from torchvision.transforms.functional import normalize
 from gfpgan.archs.gfpgan_bilinear_arch import GFPGANBilinear
 from gfpgan.archs.gfpganv1_arch import GFPGANv1
 from gfpgan.archs.gfpganv1_clean_arch import GFPGANv1Clean
-from image.tiling import tile_image_with_overlap, stitch_tiles_with_blending
-
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
+from core.processing.tiling import tile_image_with_overlap, stitch_tiles_with_blending
+from core.progress import report_progress
 
 class GFPGANer():
     """Helper for restoration with GFPGAN.
@@ -147,11 +145,11 @@ class GFPGANer():
                 tiles, positions, valid_sizes, original_size = tile_image_with_overlap(Image.fromarray(img), tile_size, tile_stride)
     
                 upscaled_tiles = []
+                total_tiles = len(tiles)
                 for i, tile in enumerate(tiles):
                     upscaled_tile = self.bg_upsampler.enhance(np.array(tile), outscale=self.upscale)
                     upscaled_tiles.append(Image.fromarray(upscaled_tile))
-                    if progress_queue:
-                        progress_queue.put((i / len(tiles)) * 100)
+                    report_progress(progress_queue, "face-background-upscale", i + 1, total_tiles)
 
                 bg_img = np.array(stitch_tiles_with_blending(upscaled_tiles, 
                                                         positions, 

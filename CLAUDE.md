@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Bachelor's thesis project: a desktop GUI image editing and AI-powered enhancement application. Combines traditional image effects (PIL, OpenCV) with deep learning super-resolution (RealESRGAN, GFPGAN) in a CustomTkinter interface.
+Bachelor's thesis project: a desktop image editing and AI-powered enhancement application. Combines traditional image effects (PIL, OpenCV) with deep learning super-resolution (RealESRGAN, GFPGAN) in a pywebview interface.
 
 ## Running the Application
 
@@ -20,74 +20,61 @@ No build step required. Requires the model weights in `weights/` directory (not 
 pip install -r requirements.txt
 ```
 
-**Note:** Upscaling runs through ONNX Runtime with the DirectML execution provider (`onnxruntime-directml`) — works on AMD/NVIDIA/Intel GPUs on Windows. PyTorch is used only for the one-time `.pth` -> `.onnx` export and for the GFPGAN face-restoration path (`constants.DEVICE` resolves to CUDA if available, else CPU).
+**Note:** Upscaling runs through ONNX Runtime with the DirectML execution provider (`onnxruntime-directml`) — works on AMD/NVIDIA/Intel GPUs on Windows. PyTorch is used for the one-time `.pth` -> `.onnx` export and for the GFPGAN face-restoration path.
 
 ## Architecture
 
 ### Entry Point & UI
 
-- **main.py** → creates ttkbootstrap root window ("superhero" theme, fullscreen) → instantiates `App`
-- **app.py** (`App` class) is the central state container: holds `self.current_image`, `self.history`, all module settings, and orchestrates all UI construction and image operations
-- **styles.py** defines custom-colored variants of CTk widgets used throughout the UI
-- **constants.py** holds slider configs, device detection logic, and tiling parameters — edit here to change defaults
+- **main.py** creates the pywebview window and exposes the Python `WebApp` API.
+- **ui/web/** contains the HTML, CSS, and JavaScript interface.
+- **core/application.py** owns image/history state, applies effects, handles native file dialogs, and runs long operations.
+- **core/processing/** contains reusable effects, resizing, tiling, and resolution operations.
+- **core/models/** contains the project's ONNX and GFPGAN model wrappers and architectures.
+- **core/constants.py** holds the shared project path and image tiling configuration.
 
 ### Module System
 
-The UI has two switchable modules managed by `App.load_module()`:
-- **Image_Effects**: brightness/saturation/contrast/sharpness/blur/inversion/denoise/deblur
+The UI has two switchable modules managed by `WebApp.set_module()` and implemented in `ui/web/scripts/modules/`:
+- **Image_Effects**: brightness/saturation/contrast/sharpness/blur/inversion/denoise
 - **Resolution_Enhancement**: RealESRGAN upscaling (2x/4x/8x) + optional GFPGAN face restoration
 
 Each module's settings are saved independently per history entry so switching history items restores the correct controls.
 
 ### Image Processing Pipeline
 
-```
-User action
-  → app.modify_image()           # lightweight effects (PIL sliders, blur)
-  → img_manipulation.py          # applies effects, calls @display_image decorator
-  → helpers.display_on_canvas()  # renders PIL image to Tkinter canvas
-
-Heavy operations (upscaling, deblur):
-  → process_handlers.start_processing()   # disables UI, shows progress dialog
-  → spawns multiprocessing.Process        # avoids blocking Tkinter event loop
-  → image_processing_wrapper()            # handles tiling for large images
-  → result/progress returned via Queue   # main thread polls with after()
-```
+- Effect settings are sent through `window.pywebview.api` and applied to the source PIL image in `WebApp`.
+- Upscaling and denoising run in a child process so the webview event loop stays responsive.
+- Progress events use dictionaries (`stage`, `current`, `total`, `unit`, `percent`) on a multiprocessing queue.
+- Image previews are rendered asynchronously; full-resolution source images remain in Python for editing and export.
 
 ### History System
 
-Every image operation that produces a new image calls `App.build_history()`. Each history entry stores:
-- The processed image (or a placeholder reference for lazy loading)
-- Scale/viewport state
-- Per-module settings snapshots (so undo restores effect sliders too)
-- Parent ID for branching history
+Each imported, cropped, or processed image creates a Python history entry containing the source PIL image, effect/enhancement settings, scale, and a cached thumbnail. Selecting a history entry restores its settings and schedules a preview render; outdated preview results are discarded.
 
-`App.load_history(id)` restores both the image and all module control states.
-
-### Tiling Strategy (`image/tiling.py`, `models/onnx_realesrganer.py`)
+### Tiling Strategy (`core/processing/tiling.py`, `core/models/onnx_realesrganer.py`)
 
 Large images are split into tiles, processed independently (manages VRAM), then stitched. The ONNX path uses fixed-size IOBinding buffers for interior tiles and a CPU prefetch thread to overlap data prep with GPU inference. Tile size and overlap defaults live in `core/constants.py`.
 
 ### Canvas Interaction
 
-- **Shift+MouseWheel**: Zoom (10–500% range, implemented in `image/scaling.py`)
-- **Shift+Click+Drag**: Pan image
-- **Ctrl+Click+Drag**: Rectangle crop selection (`image/crop.py`)
+- **Shift+MouseWheel**: Zoom (10–500%).
+- **Shift+Click+Drag**: Pan image.
+- **Ctrl+Click+Drag**: Rectangle crop selection.
 
 ### AI Models
 
-- `models/onnx_realesrganer.py` — **primary** upscaling path. ONNX Runtime + DirectML, tiled inference, FP16 preferred. On first use it exports the `.pth` weight to both FP32 and FP16 ONNX next to the original file.
-- `models/realesrganer.py` — PyTorch RealESRGAN, kept solely as the GFPGAN background upsampler.
-- `models/gfpganer.py` — GFPGAN wrapper for the optional face-restoration toggle.
-- `models/rrdbnet_arch.py` — RRDBNet definition (used by both ONNX export and the PyTorch path).
-- `models/arch_util.py` — shared PyTorch layer utilities.
+- `core/models/onnx_realesrganer.py` — **primary** upscaling path. ONNX Runtime + DirectML, tiled inference, FP16 preferred. On first use it exports the `.pth` weight to both FP32 and FP16 ONNX next to the original file.
+- `core/models/gfpganer.py` — GFPGAN wrapper for the optional face-restoration toggle.
+- `core/models/rrdbnet_arch.py` — RRDBNet definition used by ONNX export.
+- `core/models/arch_util.py` — shared PyTorch layer utilities.
 - Weights loaded from `weights/` at inference time.
 
-### Key Helper Patterns
+### Settings and Previews
 
-- `helpers.generate_function_arguments()` — converts slider/switch widget values into `kwargs` for effect functions; adding a new effect requires registering it here
-- `helpers.reset_module_tools()` — resets all controls to defaults; called on module switch
-- `@display_image` decorator in `img_manipulation.py` — wraps modification functions to automatically update the canvas after the image changes
+- Settings are stored as plain Python values per history entry and serialized through the pywebview API.
+- `_apply_effects()` applies effects to the original PIL image for export and processing.
+- Preview renders run asynchronously; a cached thumbnail is used for history selection and stale renders are discarded.
 
 ## Model Weights Location
 
@@ -105,5 +92,10 @@ weights/
 
 ## Known Architecture Notes
 
-- `app.py` is large (~629 lines) and serves as both controller and view — new UI features go here
-- `process_handlers.py` uses `multiprocessing` (not threading) because PyTorch releases the GIL inconsistently; the subprocess approach is intentional
+- Keep web presentation in `ui/web/` and Python application state/operations in `core/application.py`.
+- Keep reusable image processing code independent of the webview bridge.
+- Model inference remains in a separate process; this avoids blocking the webview event loop and allows progress reporting.
+
+## Progress Events
+
+Use `core.progress.report_progress()` for tiled work. It sends a structured dictionary containing the stage, current item, total, unit, and percentage. The controller continues to accept numeric progress values for compatibility.

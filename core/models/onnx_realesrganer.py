@@ -7,12 +7,12 @@ import numpy as np
 import onnxruntime as ort
 import torch
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
+from core.constants import ROOT_DIR
+from core.progress import report_progress
 
 def _export_to_onnx(pth_path, onnx_path, scale, num_block=23, fp16=False):
     """Export a RRDBNet .pth checkpoint to ONNX format (run once per model)."""
-    from models.rrdbnet_arch import RRDBNet
+    from core.models.rrdbnet_arch import RRDBNet
 
     model = RRDBNet(
         num_in_ch=3, num_out_ch=3, num_feat=64,
@@ -209,8 +209,7 @@ class OnnxRealESRGANer:
             output[:, oy0:oy1, ox0:ox1] = tile_out[:, vy0:vy1, vx0:vx1]
 
             done += 1
-            if progress_queue:
-                progress_queue.put((done / total) * 100)
+            report_progress(progress_queue, "upscale", done, total)
 
         # RGB float32 CHW [0, 1] → BGR uint8 HWC
         output_rgb = np.transpose(np.clip(output, 0, 1), (1, 2, 0))

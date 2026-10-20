@@ -2,8 +2,7 @@
 target-version = "py312"
 
 [tool.ruff.lint.per-file-ignores]
-"image/anti_aliasing.py" = ["F405", "F821"]
-"ui/app.py" = ["F405"]
+"core/processing/anti_aliasing.py" = ["F405", "F821"]
 
 [tool.ty.rules]
 unresolved-attribute = "ignore"

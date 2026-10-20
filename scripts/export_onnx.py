@@ -14,7 +14,7 @@ import sys
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
 
-from models.onnx_realesrganer import _export_both  # noqa: E402
+from core.models.onnx_realesrganer import _export_both  # noqa: E402
 
 WEIGHTS_DIR = os.path.join(ROOT_DIR, 'weights')
 

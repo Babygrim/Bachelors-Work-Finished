@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#171b1b">
+  <title>Picture Editor</title>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div><div class="brand-name">Picture Editor</div><div class="brand-caption">IMAGE WORKSPACE</div></div>
+      </div>
+      <div class="top-actions">
+        <span class="image-name" id="image-name">No image loaded</span>
+        <button class="button button-quiet" id="open-button"><span class="button-icon">＋</span> Import image</button>
+        <button class="button button-primary" id="export-button" disabled><span class="button-icon">↥</span> Export</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="history-panel" aria-label="Image history">
+        <div class="panel-heading"><span>History</span><span class="count" id="history-count">0</span></div>
+        <div class="history-list" id="history-list"></div>
+        <div class="history-foot">Each edit starts a new version</div>
+      </aside>
+
+      <section class="editor-area">
+        <div class="editor-toolbar">
+          <div class="mode-tabs" role="tablist" aria-label="Editor mode">
+            <button class="mode-tab selected" data-module="Image_Effects" role="tab">Adjust</button>
+            <button class="mode-tab" data-module="Resolution_Enhancement" role="tab">Enhance</button>
+          </div>
+          <div class="canvas-actions">
+            <button class="icon-button" id="crop-button" title="Crop with Ctrl + drag" aria-label="Crop image">⌗</button>
+            <button class="icon-button" id="reset-scale-button" title="Fit image" aria-label="Fit image">⤢</button>
+            <button class="icon-button danger-icon" id="remove-button" title="Remove image" aria-label="Remove image" disabled>×</button>
+          </div>
+        </div>
+
+        <div class="stage" id="stage">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-glyph" aria-hidden="true"><span></span><i></i></div>
+            <h1>Bring an image into focus.</h1>
+            <p>Open an image to begin editing.</p>
+            <button class="button button-primary" id="empty-open-button">Import image <span class="button-icon">↗</span></button>
+          </div>
+          <img class="preview-image" id="preview-image" alt="Current image preview" draggable="false" hidden>
+          <div class="crop-box" id="crop-box" hidden></div>
+          <div class="stage-info" id="stage-info" hidden></div>
+          <div class="image-loading" id="image-loading" hidden aria-live="polite">
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <span>Loading image</span>
+          </div>
+          <div class="job-overlay" id="job-overlay" hidden>
+            <div class="job-panel">
+              <div class="job-top"><span id="job-status">Processing image</span><span class="job-percent" id="job-percent">0%</span></div>
+              <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+              <div class="job-bottom"><span id="job-detail">Waiting for progress</span><button class="text-button" id="cancel-job">Cancel</button></div>
+            </div>
+          </div>
+        </div>
+
+        <footer class="image-toolbar">
+          <button class="text-button" id="fit-button">Fit</button>
+          <div class="scale-control"><span class="scale-label" id="scale-label">100%</span><input id="scale-slider" type="range" min="10" max="500" value="100" aria-label="Image scale"><span class="scale-end">500%</span></div>
+          <span class="dimensions" id="dimensions">-- × --</span>
+        </footer>
+      </section>
+
+      <aside class="inspector" id="inspector">
+        <div class="inspector-head"><div><div class="eyebrow" id="inspector-kicker">IMAGE EFFECTS</div><h2 id="inspector-title">Adjust</h2></div><button class="text-button reset-button" id="reset-module">Reset</button></div>
+        <div class="controls" id="effects-controls">
+          <div class="control-group">
+            <div class="control-label"><label for="brightness">Brightness</label><output data-output="Brightness">1.00</output></div>
+            <input class="effect-slider" id="brightness" data-setting="Brightness" type="range" min="0" max="500" value="100">
+          </div>
+          <div class="control-group">
+            <div class="control-label"><label for="color">Saturation</label><output data-output="Color">1.00</output></div>
+            <input class="effect-slider" id="color" data-setting="Color" type="range" min="0" max="500" value="100">
+          </div>
+          <div class="control-group">
+            <div class="control-label"><label for="contrast">Contrast</label><output data-output="Contrast">1.00</output></div>
+            <input class="effect-slider" id="contrast" data-setting="Contrast" type="range" min="0" max="500" value="100">
+          </div>
+          <div class="control-group">
+            <div class="control-label"><label for="sharpness">Sharpness</label><output data-output="Sharpness">1.00</output></div>
+            <input class="effect-slider" id="sharpness" data-setting="Sharpness" type="range" min="-500" max="500" value="100">
+          </div>
+          <div class="control-group">
+            <div class="control-label"><label for="blur">Gaussian blur</label><output data-output="Blur">0.00</output></div>
+            <input class="effect-slider" id="blur" data-setting="Blur" type="range" min="0" max="1000" value="0">
+          </div>
+          <div class="setting-row"><div><strong>Invert colors</strong><small>Reverse image color values</small></div><label class="switch"><input id="inversion" data-setting="Inversion" type="checkbox"><span></span></label></div>
+          <div class="control-divider"></div>
+          <button class="button button-secondary full-button" id="denoise-button">Denoise image <span class="button-icon">✳</span></button>
+        </div>
+
+        <div class="controls" id="enhance-controls" hidden>
+          <div class="section-label">UPSCALE FACTOR</div>
+          <div class="segmented" id="factor-options">
+            <button data-factor="2">2×</button><button data-factor="4">4×</button><button data-factor="8">8×</button>
+          </div>
+          <div class="control-group model-group">
+            <div class="control-label"><label for="model-select">Model</label></div>
+            <select id="model-select"></select>
+          </div>
+          <div class="setting-row"><div><strong>Keep original size</strong><small>Upscale then return to source dimensions</small></div><label class="switch"><input id="keep-size" type="checkbox"><span></span></label></div>
+          <div class="setting-row"><div><strong>Facial restoration</strong><small>Apply GFPGAN face recovery</small></div><label class="switch"><input id="face-restoration" type="checkbox"><span></span></label></div>
+          <div class="control-divider"></div>
+          <button class="button button-secondary full-button" id="upscale-button">Run Real-ESRGAN <span class="button-icon">↗</span></button>
+        </div>
+      </aside>
+    </main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </div>
+  <script type="module" src="scripts/app.js"></script>
+</body>
+</html>

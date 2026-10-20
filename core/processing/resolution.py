@@ -1,12 +1,12 @@
 from PIL import Image
-from models.gfpganer import GFPGANer
-from models.onnx_realesrganer import OnnxRealESRGANer
+from core.models.gfpganer import GFPGANer
+from core.models.onnx_realesrganer import OnnxRealESRGANer
 import os
 import numpy as np
 import cv2
 from time import time
 from core.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
-from image.manipulation import resize_image
+from core.processing.resize import resize_image
 from core.constants import ROOT_DIR
 
 
@@ -67,7 +67,11 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         output_bgr = upscaler.enhance(img_bgr, progress_queue=progress_bar_queue)
         final_image = Image.fromarray(cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB))
     if outscale_factor < 1:
-        final_image, _ = resize_image(None, photo_image=final_image, new_height=final_image.height * outscale_factor, new_width=final_image.width * outscale_factor)
+        final_image, _ = resize_image(
+            final_image,
+            new_height=final_image.height * outscale_factor,
+            new_width=final_image.width * outscale_factor,
+        )
     
     print(f"Upscaling completed in {time() - start_time:.2f} seconds.")
     return final_image
