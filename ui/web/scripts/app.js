@@ -6,6 +6,8 @@ const SLIDER_SETTING_KEYS = new Set(['Brightness', 'Color', 'Contrast', 'Sharpne
 let state = null;
 let pan = { x: 0, y: 0 };
 const panById = new Map();
+const videoPlayer = document.querySelector('#video-player');
+let lastVideoPositionSync = 0;
 let dragStart = null;
 let cropStart = null;
 let toastTimer = null;
@@ -62,29 +64,67 @@ function setBusy(busy) {
   }
 }
 
+function syncVideoTimeline() {
+  const duration = Number.isFinite(videoPlayer.duration)
+    ? videoPlayer.duration
+    : state?.video?.duration || 0;
+  const current = Number.isFinite(videoPlayer.currentTime) ? videoPlayer.currentTime : 0;
+  const formatTime = (seconds) => {
+    const value = Math.max(0, Math.floor(seconds));
+    return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+  };
+  $('#video-time').textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+  if (document.activeElement !== $('#video-seek')) {
+    $('#video-seek').value = duration ? Math.round((current / duration) * 1000) : 0;
+  }
+  $('#video-play').textContent = videoPlayer.paused ? '▶' : 'Ⅱ';
+  $('#video-play').setAttribute('aria-label', videoPlayer.paused ? 'Play video' : 'Pause video');
+  const volume = $('#video-volume');
+  if (document.activeElement !== volume) {
+    volume.value = videoPlayer.muted ? 0 : videoPlayer.volume;
+  }
+}
+
 function applyPreview(next) {
   const stage = $('#stage');
   const image = $('#preview-image');
+  const video = $('#video-player');
   if (!next?.has_image) {
+    video.pause();
+    video.hidden = true;
     image.hidden = true;
     $('#empty-state').hidden = false;
     $('#stage-info').hidden = true;
     return;
   }
   $('#empty-state').hidden = true;
-  image.hidden = false;
-  if (next.image) {
-    image.src = next.image;
-  }
   const [width, height] = next.image_size;
   const inset = 64;
   const fit = Math.min((stage.clientWidth - inset) / width, (stage.clientHeight - inset) / height, 1);
   const zoom = next.scale || 1;
-  image.style.width = `${Math.max(1, width * fit * zoom)}px`;
-  image.style.height = `${Math.max(1, height * fit * zoom)}px`;
-  image.style.left = `calc(50% + ${pan.x}px)`;
-  image.style.top = `calc(50% + ${pan.y}px)`;
-  image.style.transform = 'translate(-50%, -50%)';
+  if (next.kind === 'video' && next.video?.url) {
+    image.hidden = true;
+    video.hidden = false;
+    if (video.dataset.source !== next.video.url) {
+      video.pause();
+      video.crossOrigin = 'anonymous';
+      video.dataset.source = next.video.url;
+      video.src = next.video.url;
+      video.load();
+    }
+    video.style.width = `${Math.max(1, width * fit)}px`;
+    video.style.height = `${Math.max(1, height * fit)}px`;
+  } else {
+    video.pause();
+    video.hidden = true;
+    image.hidden = false;
+    if (next.image) image.src = next.image;
+    image.style.width = `${Math.max(1, width * fit * zoom)}px`;
+    image.style.height = `${Math.max(1, height * fit * zoom)}px`;
+    image.style.left = `calc(50% + ${pan.x}px)`;
+    image.style.top = `calc(50% + ${pan.y}px)`;
+    image.style.transform = 'translate(-50%, -50%)';
+  }
   $('#stage-info').textContent = `${width} × ${height}`;
   $('#stage-info').hidden = false;
 }
@@ -97,6 +137,7 @@ function renderHistory(next) {
     const button = document.createElement('button');
       button.className = `history-item${item.id === next.current_id ? ' active' : ''}`;
     button.dataset.historyId = item.id;
+    button.dataset.kind = item.kind;
     button.type = 'button';
     button.disabled = imageLoading || resultPreviewId || next.image_loading || next.job.running;
     button.title = `${item.name}, ${item.size[0]} × ${item.size[1]}`;
@@ -109,10 +150,18 @@ function renderHistory(next) {
     const name = document.createElement('span');
     name.className = 'history-name';
     name.textContent = item.name;
+    if (item.kind === 'video') {
+      const kind = document.createElement('span');
+      kind.className = 'history-kind';
+      kind.textContent = 'VIDEO';
+      button.append(thumb, kind, name);
+    } else {
+      button.append(thumb, name);
+    }
     const size = document.createElement('span');
     size.className = 'history-size';
     size.textContent = `${item.size[0]} × ${item.size[1]}`;
-    button.append(thumb, name, size);
+    button.append(size);
     button.addEventListener('click', async () => {
       updateHistorySelection(item.id);
       await withImageLoader(() => callApi('select_history', item.id), 450);
@@ -175,11 +224,15 @@ async function importImage() {
 function syncControls(next) {
   syncAdjustControls(next, pendingSettings);
   syncEnhanceControls(next, pendingSettings);
+  const isVideo = next.kind === 'video';
   const enhanced = next.module === 'Resolution_Enhancement';
-  $('#effects-controls').hidden = enhanced;
-  $('#enhance-controls').hidden = !enhanced;
-  $('#inspector-title').textContent = enhanced ? 'Enhance' : 'Adjust';
-  $('#inspector-kicker').textContent = enhanced ? 'RESOLUTION ENHANCEMENT' : 'IMAGE EFFECTS';
+  $('#effects-controls').hidden = isVideo || enhanced;
+  $('#enhance-controls').hidden = isVideo || !enhanced;
+  $('#video-controls').hidden = !isVideo;
+  $('#image-toolbar').hidden = isVideo;
+  $('#video-toolbar').hidden = !isVideo;
+  $('#inspector-title').textContent = isVideo ? 'Video' : enhanced ? 'Enhance' : 'Adjust';
+  $('#inspector-kicker').textContent = isVideo ? 'VIDEO ENHANCEMENT' : enhanced ? 'RESOLUTION ENHANCEMENT' : 'IMAGE EFFECTS';
   document.querySelectorAll('.mode-tab').forEach((tab) => tab.classList.toggle('selected', tab.dataset.module === next.module));
   $('#image-name').textContent = next.image_name || 'No image loaded';
   $('#export-button').disabled = !next.has_image || next.image_loading || next.job.running;
@@ -206,6 +259,25 @@ function syncControls(next) {
   const previewHandoff = Boolean(resultPreviewId);
   $('#image-loading').hidden = !(imageLoading || previewHandoff);
   setBusy(job.running);
+  $('#adjust-tab').disabled = !next.has_image || isVideo || next.image_loading || job.running;
+  $('#enhance-tab').disabled = !next.has_image || isVideo || next.image_loading || job.running;
+  $('#video-tab').disabled = !isVideo || next.image_loading || job.running;
+  $('#crop-button').disabled = !next.has_image || next.image_loading || job.running;
+  $('#video-play').textContent = videoPlayer.paused ? '▶' : 'Ⅱ';
+  $('#video-play').setAttribute('aria-label', videoPlayer.paused ? 'Play video' : 'Pause video');
+  if (next.video) {
+    syncVideoTimeline();
+    $('#video-seek').disabled = job.running;
+    $('#video-play').disabled = job.running;
+    $('#video-rewind').disabled = job.running;
+    $('#video-step-back').disabled = job.running;
+    $('#video-step-forward').disabled = job.running;
+    $('#video-forward').disabled = job.running;
+    $('#video-volume').disabled = job.running;
+    $('#save-video-frame').disabled = job.running;
+    $('#save-video-frame-side').disabled = job.running;
+    $('#crop-video-frame').disabled = job.running;
+  }
   if (job.status === 'Complete' || job.status === 'Cancelled') {
     callApi('dismiss_job');
   }
@@ -318,6 +390,75 @@ document.querySelectorAll('.mode-tab').forEach((tab) => tab.addEventListener('cl
 bindAdjustControls(setSetting, runAction);
 bindEnhanceControls(setSetting, runAction);
 
+function syncVideoPosition(force = false) {
+  if (!state?.video || !Number.isFinite(videoPlayer.currentTime)) return;
+  syncVideoTimeline();
+  const now = performance.now();
+  if (force || now - lastVideoPositionSync >= 250) {
+    lastVideoPositionSync = now;
+    callApi('set_video_position', videoPlayer.currentTime).catch(() => {});
+  }
+}
+
+function seekVideo(seconds) {
+  if (!state?.video || !Number.isFinite(videoPlayer.duration)) return;
+  videoPlayer.currentTime = Math.max(0, Math.min(videoPlayer.duration, seconds));
+  syncVideoPosition(true);
+}
+
+videoPlayer.addEventListener('loadedmetadata', () => {
+  if (state?.video && Number.isFinite(state.video.position)) {
+    videoPlayer.currentTime = Math.min(state.video.position, videoPlayer.duration || state.video.position);
+  }
+  syncVideoTimeline();
+});
+videoPlayer.addEventListener('timeupdate', () => syncVideoPosition());
+videoPlayer.addEventListener('pause', () => syncVideoPosition(true));
+videoPlayer.addEventListener('ended', () => syncVideoPosition(true));
+videoPlayer.addEventListener('volumechange', syncVideoTimeline);
+$('#video-play').addEventListener('click', async () => {
+  if (!state?.video) return;
+  if (videoPlayer.paused) {
+    try {
+      await videoPlayer.play();
+    } catch (error) {
+      setToast(`Could not play video: ${error.message}`, 'error');
+    }
+  } else {
+    videoPlayer.pause();
+  }
+  syncVideoTimeline();
+});
+$('#video-rewind').addEventListener('click', () => seekVideo(videoPlayer.currentTime - 10));
+$('#video-forward').addEventListener('click', () => seekVideo(videoPlayer.currentTime + 10));
+$('#video-step-back').addEventListener('click', () => {
+  videoPlayer.pause();
+  seekVideo(videoPlayer.currentTime - 1 / (state?.video?.fps || 30));
+});
+$('#video-step-forward').addEventListener('click', () => {
+  videoPlayer.pause();
+  seekVideo(videoPlayer.currentTime + 1 / (state?.video?.fps || 30));
+});
+$('#video-volume').addEventListener('input', (event) => {
+  const volume = Number(event.target.value);
+  videoPlayer.volume = volume;
+  videoPlayer.muted = volume === 0;
+  syncVideoTimeline();
+});
+$('#video-seek').addEventListener('input', (event) => {
+  if (Number.isFinite(videoPlayer.duration)) {
+    seekVideo((Number(event.target.value) / 1000) * videoPlayer.duration);
+  }
+});
+$('#save-video-frame').addEventListener('click', () => runAction('save_video_frame', videoPlayer.currentTime));
+$('#save-video-frame-side').addEventListener('click', () => runAction('save_video_frame', videoPlayer.currentTime));
+$('#crop-video-frame').addEventListener('click', () => {
+  cropMode = true;
+  $('#stage').classList.add('cropping');
+  $('#crop-button').classList.add('active');
+  setToast('Drag over the current frame to create a cropped image.');
+});
+
 function updateScale(value) {
   setScale(value);
 }
@@ -375,12 +516,16 @@ window.addEventListener('pointerup', async (event) => {
       $('#stage').classList.remove('cropping');
       $('#crop-button').classList.remove('active');
     }
-    const imageRect = $('#preview-image').getBoundingClientRect();
+    const displayedImage = state?.kind === 'video' ? videoPlayer : $('#preview-image');
+    const imageRect = displayedImage.getBoundingClientRect();
     const left = Math.max(0, Math.min(start.x, event.clientX) - imageRect.left) / imageRect.width;
     const top = Math.max(0, Math.min(start.y, event.clientY) - imageRect.top) / imageRect.height;
     const right = Math.min(imageRect.width, Math.max(start.x, event.clientX) - imageRect.left) / imageRect.width;
     const bottom = Math.min(imageRect.height, Math.max(start.y, event.clientY) - imageRect.top) / imageRect.height;
-    if (right > left && bottom > top) await runAction('crop_image', [left, top, right, bottom]);
+    if (right > left && bottom > top) {
+      const position = state?.kind === 'video' ? videoPlayer.currentTime : undefined;
+      await runAction('crop_image', [left, top, right, bottom], position);
+    }
   }
   dragStart = null;
 });

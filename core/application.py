@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from queue import Empty
 
+import cv2
 import webview
 from PIL import Image, ImageEnhance, ImageFilter
 
@@ -13,6 +14,7 @@ from core.app_logging import log_toast
 from core.constants import ROOT_DIR
 from core.processing import effects as img_effects
 from core.processing import resolution as img_resolution
+from core.video_stream import VideoStreamServer
 
 _native_window = None
 
@@ -31,6 +33,7 @@ SLIDER_RANGES = {
     "Sharpness": (-500, 500),
     "Blur": (0, 1000),
 }
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
 
 def _run_image_operation(function, image, arguments, result_queue, progress_queue):
@@ -46,6 +49,7 @@ class WebApp:
         self._entries = []
         self._current_id = None
         self._pending_image_path = None
+        self._video_stream = VideoStreamServer()
         self._module = "Image_Effects"
         self._revision = 0
         self._preview_revision = 0
@@ -118,6 +122,15 @@ class WebApp:
         encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
         return f"data:image/webp;base64,{encoded}"
 
+    @staticmethod
+    def _video_preview_url(image):
+        preview = image.copy()
+        preview.thumbnail((960, 720), Image.Resampling.BILINEAR)
+        buffer = io.BytesIO()
+        preview.save(buffer, format="WEBP", quality=72, method=0)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:image/webp;base64,{encoded}"
+
     def _touch(self, preview=False, immediate=False):
         self._revision += 1
         if preview:
@@ -129,6 +142,11 @@ class WebApp:
             entry = self._current()
             if not entry:
                 self._preview_url = None
+                self._preview_delivery_revision += 1
+                return
+
+            if entry["kind"] == "video":
+                self._preview_url = self._video_preview_url(entry["image"])
                 self._preview_delivery_revision += 1
                 return
 
@@ -186,12 +204,26 @@ class WebApp:
         extension="png",
         original_size=None,
         full_resolution=True,
+        kind="image",
+        video_path=None,
+        video_url=None,
+        video_fps=0.0,
+        video_frame_count=0,
+        video_frame_index=0,
+        video_position=0.0,
     ):
         entry = {
             "id": uuid.uuid4().hex[:12],
             "image": image.convert("RGBA"),
             "original_size": original_size or image.size,
             "image_loading": not full_resolution,
+            "kind": kind,
+            "video_path": str(video_path) if video_path else None,
+            "video_url": video_url,
+            "video_fps": float(video_fps),
+            "video_frame_count": int(video_frame_count),
+            "video_frame_index": int(video_frame_index),
+            "video_position": float(video_position),
             "name": name,
             "extension": extension or "png",
             "settings": self._default_settings(),
@@ -204,6 +236,10 @@ class WebApp:
         self._entries.append(entry)
         self._current_id = entry["id"]
         self._history_revision += 1
+        if kind == "video":
+            self._module = "Video_Enhancement"
+        else:
+            self._module = "Image_Effects"
         self._touch(preview=True, immediate=True)
 
     def get_state(self, previous_revision=None, previous_history_revision=None):
@@ -215,9 +251,19 @@ class WebApp:
                 "image_revision": self._preview_delivery_revision,
                 "history_revision": self._history_revision,
                 "current_id": self._current_id,
+                "kind": entry["kind"] if entry else "image",
                 "has_image": entry is not None,
                 "image_loading": bool(entry and entry["image_loading"]),
                 "preview_loading": self._preview_worker_running,
+                "video": {
+                    "url": entry["video_url"],
+                    "frame": entry["video_frame_index"],
+                    "frame_count": entry["video_frame_count"],
+                    "fps": entry["video_fps"],
+                    "position": entry["video_position"],
+                    "duration": entry["video_frame_count"] / entry["video_fps"]
+                    if entry["video_fps"] > 0 else 0,
+                } if entry and entry["kind"] == "video" else None,
                 "image": None,
                 "image_size": None,
                 "image_name": None,
@@ -231,6 +277,7 @@ class WebApp:
                         "name": item["name"],
                         "size": item["original_size"],
                         "thumbnail": item["thumbnail"],
+                        "kind": item["kind"],
                     }
                     for item in self._entries
                 ] if previous_history_revision != self._history_revision else None,
@@ -252,7 +299,10 @@ class WebApp:
         selected = _native_window.create_file_dialog(
             webview.OPEN_DIALOG,
             allow_multiple=False,
-            file_types=("Image files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff)",),
+            file_types=(
+                "Image files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff)",
+                "Video files (*.mp4;*.mov;*.avi;*.mkv;*.webm;*.m4v)",
+            ),
         )
         if not selected:
             return False
@@ -265,6 +315,8 @@ class WebApp:
         if not path or self._job["running"]:
             return False
         path = Path(path)
+        if path.suffix.lower() in VIDEO_EXTENSIONS:
+            return self._load_video(path)
         try:
             with Image.open(path) as source:
                 original_size = source.size
@@ -289,6 +341,38 @@ class WebApp:
         except Exception as error:
             self._set_message("error", f"Could not open image: {error}")
             return False
+
+    def _load_video(self, path):
+        capture = cv2.VideoCapture(str(path))
+        if not capture.isOpened():
+            capture.release()
+            self._set_message("error", f"Could not open video: {path.name}")
+            return False
+        success, frame = capture.read()
+        if not success:
+            capture.release()
+            self._set_message("error", f"Could not read the first video frame: {path.name}")
+            return False
+
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        frame_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+        video_url = self._video_stream.register(path)
+        capture.release()
+        with self._lock:
+            self._new_entry(
+                frame_image,
+                path.stem,
+                "png",
+                kind="video",
+                video_path=path,
+                video_url=video_url,
+                video_fps=fps,
+                video_frame_count=frame_count,
+                video_frame_index=0,
+                video_position=0,
+            )
+        return True
 
     def _load_full_resolution_image(self, entry_id, path):
         try:
@@ -376,11 +460,61 @@ class WebApp:
             self._touch()
 
     def set_module(self, module):
-        if module not in ("Image_Effects", "Resolution_Enhancement"):
-            return False
         with self._lock:
+            entry = self._current()
+            available = (
+                ("Video_Enhancement",)
+                if entry and entry["kind"] == "video"
+                else ("Image_Effects", "Resolution_Enhancement")
+            )
+            if module not in available:
+                return False
             self._module = module
             self._touch()
+        return True
+
+    def set_video_position(self, seconds):
+        with self._lock:
+            entry = self._current()
+            if not entry or entry["kind"] != "video":
+                return False
+            duration = entry["video_frame_count"] / entry["video_fps"] if entry["video_fps"] > 0 else 0
+            entry["video_position"] = max(0.0, min(float(seconds), duration))
+            entry["video_frame_index"] = int(entry["video_position"] * entry["video_fps"])
+            self._revision += 1
+        return True
+
+    @staticmethod
+    def _capture_video_frame(video_path, position):
+        capture = cv2.VideoCapture(video_path)
+        try:
+            if not capture.isOpened():
+                return None
+            capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, float(position)) * 1000)
+            success, frame = capture.read()
+            if not success:
+                return None
+            return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+        finally:
+            capture.release()
+
+    def save_video_frame(self, position=None):
+        with self._lock:
+            entry = self._current()
+            if not entry or entry["kind"] != "video" or self._job["running"]:
+                return False
+            position = entry["video_position"] if position is None else float(position)
+            video_path = entry["video_path"]
+            name = f"{entry['name']}_frame_{int(position * max(entry['video_fps'], 1)) + 1:06d}"
+            entry_id = entry["id"]
+        image = self._capture_video_frame(video_path, position)
+        if image is None:
+            return False
+        with self._lock:
+            current = self._current()
+            if not current or current["id"] != entry_id:
+                return False
+            self._new_entry(image, name, "png")
         return True
 
     def set_setting(self, key, value):
@@ -431,6 +565,10 @@ class WebApp:
             selected = next((item for item in self._entries if item["id"] == image_id), None)
             if self._job["running"] or not selected or selected["image_loading"]:
                 return False
+            if selected["kind"] == "video":
+                self._module = "Video_Enhancement"
+            else:
+                self._module = "Image_Effects"
             self._current_id = image_id
             self._touch(preview=True, immediate=True)
         return True
@@ -442,6 +580,8 @@ class WebApp:
                 return False
             self._entries = [item for item in self._entries if item["id"] != self._current_id]
             self._current_id = self._entries[-1]["id"] if self._entries else None
+            current = self._current()
+            self._module = "Image_Effects" if not current or current["kind"] == "image" else "Video_Enhancement"
             self._history_revision += 1
             self._touch(preview=True, immediate=True)
         return True
@@ -455,25 +595,50 @@ class WebApp:
             self._touch()
         return True
 
-    def crop_image(self, bounds):
+    @staticmethod
+    def _crop_bounds(image, bounds):
+        left, top, right, bottom = (float(value) for value in bounds)
+        width, height = image.size
+        box = (
+            max(0, min(width, int(left * width))),
+            max(0, min(height, int(top * height))),
+            max(0, min(width, int(right * width))),
+            max(0, min(height, int(bottom * height))),
+        )
+        if box[0] >= box[2] or box[1] >= box[3]:
+            return None
+        return image.crop(box)
+
+    def crop_image(self, bounds, video_position=None):
         with self._lock:
             entry = self._current()
             if not entry or entry["image_loading"] or self._job["running"]:
                 return False
-            image = self._apply_effects(entry["image"], entry["settings"])
-            left, top, right, bottom = (float(value) for value in bounds)
-            width, height = image.size
-            box = (
-                max(0, min(width, int(left * width))),
-                max(0, min(height, int(top * height))),
-                max(0, min(width, int(right * width))),
-                max(0, min(height, int(bottom * height))),
-            )
-            if box[0] >= box[2] or box[1] >= box[3]:
+            entry_id = entry["id"]
+            video_frame = entry["kind"] == "video"
+            if video_frame:
+                video_path = entry["video_path"]
+                video_position = entry["video_position"] if video_position is None else float(video_position)
+                name = f"{entry['name']}_frame_{int(video_position * max(entry['video_fps'], 1)):06d}_crop"
+            else:
+                image = self._apply_effects(entry["image"], entry["settings"])
+                name = entry["name"]
+                extension = entry["extension"]
+
+        if video_frame:
+            image = self._capture_video_frame(video_path, video_position)
+            if image is None:
                 return False
-            cropped = image.crop(box)
-            self._new_entry(cropped, entry["name"], entry["extension"])
-            return True
+        cropped = self._crop_bounds(image, bounds)
+        if cropped is None:
+            return False
+
+        with self._lock:
+            current = self._current()
+            if not current or current["id"] != entry_id or self._job["running"]:
+                return False
+            self._new_entry(cropped, name, "png" if video_frame else extension)
+        return True
 
     def start_operation(self, operation):
         with self._lock:

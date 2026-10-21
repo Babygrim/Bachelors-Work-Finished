@@ -38,8 +38,9 @@ pip install -r requirements.txt
 The UI has two switchable modules managed by `WebApp.set_module()` and implemented in `ui/web/scripts/modules/`:
 - **Image_Effects**: brightness/saturation/contrast/sharpness/blur/inversion/denoise
 - **Resolution_Enhancement**: RealESRGAN upscaling (2x/4x/8x) + optional GFPGAN face restoration
+- **Video_Enhancement**: automatically selected for video history entries; provides frame playback, seek, crop, and save-frame actions.
 
-Each module's settings are saved independently per history entry so switching history items restores the correct controls.
+Image settings are saved independently per history entry. Video entries retain their source path, FPS, and current frame; cropping or saving a frame creates a still-image history entry.
 
 ### Image Processing Pipeline
 

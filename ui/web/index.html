@@ -16,7 +16,7 @@
       </div>
       <div class="top-actions">
         <span class="image-name" id="image-name">No image loaded</span>
-        <button class="button button-quiet" id="open-button"><span class="button-icon">＋</span> Import image</button>
+        <button class="button button-quiet" id="open-button"><span class="button-icon">＋</span> Import media</button>
         <button class="button button-primary" id="export-button" disabled><span class="button-icon">↥</span> Export</button>
       </div>
     </header>
@@ -31,8 +31,9 @@
       <section class="editor-area">
         <div class="editor-toolbar">
           <div class="mode-tabs" role="tablist" aria-label="Editor mode">
-            <button class="mode-tab selected" data-module="Image_Effects" role="tab">Adjust</button>
-            <button class="mode-tab" data-module="Resolution_Enhancement" role="tab">Enhance</button>
+            <button class="mode-tab selected" data-module="Image_Effects" id="adjust-tab" role="tab">Adjust</button>
+            <button class="mode-tab" data-module="Resolution_Enhancement" id="enhance-tab" role="tab">Enhance</button>
+            <button class="mode-tab" data-module="Video_Enhancement" id="video-tab" role="tab" disabled>Video</button>
           </div>
           <div class="canvas-actions">
             <button class="icon-button" id="crop-button" title="Crop with Ctrl + drag" aria-label="Crop image">⌗</button>
@@ -46,9 +47,10 @@
             <div class="empty-glyph" aria-hidden="true"><span></span><i></i></div>
             <h1>Bring an image into focus.</h1>
             <p>Open an image to begin editing.</p>
-            <button class="button button-primary" id="empty-open-button">Import image <span class="button-icon">↗</span></button>
+            <button class="button button-primary" id="empty-open-button">Import media <span class="button-icon">↗</span></button>
           </div>
           <img class="preview-image" id="preview-image" alt="Current image preview" draggable="false" hidden>
+          <video class="video-player" id="video-player" playsinline preload="auto" hidden></video>
           <div class="crop-box" id="crop-box" hidden></div>
           <div class="stage-info" id="stage-info" hidden></div>
           <div class="image-loading" id="image-loading" hidden aria-live="polite">
@@ -64,10 +66,24 @@
           </div>
         </div>
 
-        <footer class="image-toolbar">
+        <footer class="image-toolbar" id="image-toolbar">
           <button class="text-button" id="fit-button">Fit</button>
           <div class="scale-control"><span class="scale-label" id="scale-label">100%</span><input id="scale-slider" type="range" min="10" max="500" value="100" aria-label="Image scale"><span class="scale-end">500%</span></div>
           <span class="dimensions" id="dimensions">-- × --</span>
+        </footer>
+        <footer class="video-toolbar" id="video-toolbar" hidden>
+          <button class="icon-button" id="video-rewind" title="Rewind 10 seconds" aria-label="Rewind 10 seconds">↶</button>
+          <button class="icon-button" id="video-step-back" title="Previous frame" aria-label="Previous frame">◀</button>
+          <button class="video-play-button" id="video-play" aria-label="Play video">▶</button>
+          <button class="icon-button" id="video-step-forward" title="Next frame" aria-label="Next frame">▶</button>
+          <button class="icon-button" id="video-forward" title="Forward 10 seconds" aria-label="Forward 10 seconds">↷</button>
+          <label class="video-volume" title="Video volume">
+            <span aria-hidden="true">VOL</span>
+            <input id="video-volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Video volume">
+          </label>
+          <span class="video-time" id="video-time">00:00 / 00:00</span>
+          <input id="video-seek" type="range" min="0" max="1000" value="0" aria-label="Video position">
+          <button class="button button-quiet" id="save-video-frame">Save frame</button>
         </footer>
       </section>
 
@@ -112,6 +128,17 @@
           <div class="setting-row"><div><strong>Facial restoration</strong><small>Apply GFPGAN face recovery</small></div><label class="switch"><input id="face-restoration" type="checkbox"><span></span></label></div>
           <div class="control-divider"></div>
           <button class="button button-secondary full-button" id="upscale-button">Run Real-ESRGAN <span class="button-icon">↗</span></button>
+        </div>
+
+        <div class="controls" id="video-controls" hidden>
+          <div class="section-label">CURRENT FRAME</div>
+          <button class="button button-secondary full-button" id="crop-video-frame">Crop current frame <span class="button-icon">⌗</span></button>
+          <button class="button button-secondary full-button video-action" id="save-video-frame-side">Save frame as image <span class="button-icon">↧</span></button>
+          <div class="control-divider"></div>
+          <div class="section-label">VIDEO TOOLS</div>
+          <button class="button button-secondary full-button" disabled>Enhance full video <span class="button-icon">◌</span></button>
+          <button class="button button-secondary full-button" disabled>Stabilize video <span class="button-icon">⌁</span></button>
+          <p class="video-placeholder-note">Full-video processing tools are not available yet.</p>
         </div>
       </aside>
     </main>
