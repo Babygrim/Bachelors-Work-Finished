@@ -297,11 +297,10 @@ class WebApp:
         if not _native_window or self._job["running"] or (current and current["image_loading"]):
             return False
         selected = _native_window.create_file_dialog(
-            webview.OPEN_DIALOG,
+            webview.FileDialog.OPEN,
             allow_multiple=False,
             file_types=(
-                "Image files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff)",
-                "Video files (*.mp4;*.mov;*.avi;*.mkv;*.webm;*.m4v)",
+                "Media files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff;*.mp4;*.mov;*.avi;*.mkv;*.webm;*.m4v)",
             ),
         )
         if not selected:
@@ -401,7 +400,7 @@ class WebApp:
             return False
         extension = entry["extension"] or "png"
         selected = _native_window.create_file_dialog(
-            webview.SAVE_DIALOG,
+            webview.FileDialog.SAVE,
             save_filename=f"{entry['name']}_{entry['id']}.{extension}",
             file_types=("Image files (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff)",),
         )

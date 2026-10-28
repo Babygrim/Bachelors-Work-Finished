@@ -81,8 +81,15 @@
             <span aria-hidden="true">VOL</span>
             <input id="video-volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Video volume">
           </label>
+          <button class="button button-quiet video-size-button" id="video-size" title="View at original pixel size">1:1</button>
+          <label class="video-zoom-control">
+            <span>ZOOM</span>
+            <output id="video-zoom-label">100%</output>
+            <input id="video-zoom" type="range" min="10" max="500" value="100" aria-label="Video zoom">
+          </label>
           <span class="video-time" id="video-time">00:00 / 00:00</span>
           <input id="video-seek" type="range" min="0" max="1000" value="0" aria-label="Video position">
+          <button class="button button-quiet" id="video-crop-frame" title="Select an area of the current frame to crop">Crop frame</button>
           <button class="button button-quiet" id="save-video-frame">Save frame</button>
         </footer>
       </section>

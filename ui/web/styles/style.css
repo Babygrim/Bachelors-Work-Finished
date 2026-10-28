@@ -75,7 +75,7 @@ button { color: inherit; }
 .stage { position: relative; flex: 1; min-height: 240px; display: grid; place-items: center; overflow: hidden; background-color: var(--stage); background-image: radial-gradient(#29302e 0.75px, transparent 0.75px); background-size: 18px 18px; }
 .stage::after { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 36%, rgba(0, 0, 0, .25)); content: ''; }
 .preview-image { position: absolute; z-index: 1; max-width: none; max-height: none; object-fit: fill; user-select: none; filter: drop-shadow(0 8px 22px rgba(0, 0, 0, .38)); animation: image-arrive .26s ease-out; }
-.video-player { position: absolute; z-index: 1; max-width: calc(100% - 64px); max-height: calc(100% - 64px); background: #090c0b; object-fit: contain; }
+.video-player { position: absolute; z-index: 1; background: #090c0b; object-fit: contain; }
 @keyframes image-arrive { from { opacity: .65; transform: scale(.985); } to { opacity: 1; } }
 .empty-state { z-index: 1; display: flex; flex-direction: column; align-items: center; color: #b3bdb5; animation: fade-up .35s ease-out; }
 @keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -101,7 +101,11 @@ button { color: inherit; }
 .video-toolbar #video-seek { flex: 1; min-width: 70px; }
 .video-volume { display: flex; flex: 0 0 104px; align-items: center; gap: 6px; color: #87938b; font: 9px var(--mono); }
 .video-volume input[type=range] { width: 76px; min-width: 0; }
+.video-zoom-control { display: flex; flex: 0 0 112px; align-items: center; gap: 5px; color: #87938b; font: 9px var(--mono); }
+.video-zoom-control output { min-width: 32px; color: #aab5ad; text-align: right; }
+.video-zoom-control input[type=range] { width: 68px; min-width: 0; }
 .video-time { min-width: 92px; color: #aab5ad; font: 10px var(--mono); text-align: center; white-space: nowrap; }
+.video-size-button { flex: 0 0 42px; }
 .video-play-button { width: 36px; height: 32px; border: 1px solid #72865b; border-radius: 4px; background: #37432f; color: var(--lime); cursor: pointer; font-size: 15px; }
 .video-play-button:hover { background: #46583a; }
 .video-action { margin-top: 8px; }

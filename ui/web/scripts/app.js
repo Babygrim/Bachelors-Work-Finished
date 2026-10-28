@@ -5,6 +5,7 @@ const $ = (selector) => document.querySelector(selector);
 const SLIDER_SETTING_KEYS = new Set(['Brightness', 'Color', 'Contrast', 'Sharpness', 'Blur']);
 let state = null;
 let pan = { x: 0, y: 0 };
+let videoNativeSize = false;
 const panById = new Map();
 const videoPlayer = document.querySelector('#video-player');
 let lastVideoPositionSync = 0;
@@ -13,6 +14,7 @@ let cropStart = null;
 let toastTimer = null;
 let settingTimer = null;
 let scaleTimer = null;
+let pendingScale = null;
 const pendingSettings = new Map();
 let settingsFlushInProgress = false;
 let stateRefreshQueued = false;
@@ -105,15 +107,29 @@ function applyPreview(next) {
   if (next.kind === 'video' && next.video?.url) {
     image.hidden = true;
     video.hidden = false;
+    const changedEntry = video.dataset.entryId !== next.current_id;
+    if (changedEntry) {
+      videoNativeSize = false;
+      video.dataset.entryId = next.current_id;
+    }
     if (video.dataset.source !== next.video.url) {
       video.pause();
       video.crossOrigin = 'anonymous';
       video.dataset.source = next.video.url;
       video.src = next.video.url;
       video.load();
+    } else if (changedEntry && video.readyState >= 1) {
+      video.pause();
+      video.currentTime = next.video.position || 0;
     }
-    video.style.width = `${Math.max(1, width * fit)}px`;
-    video.style.height = `${Math.max(1, height * fit)}px`;
+    const videoWidth = video.videoWidth || width;
+    const videoHeight = video.videoHeight || height;
+    const videoScale = videoNativeSize ? 1 : fit * zoom;
+    video.style.width = `${Math.max(1, videoWidth * videoScale)}px`;
+    video.style.height = `${Math.max(1, videoHeight * videoScale)}px`;
+    video.style.left = `calc(50% + ${pan.x}px)`;
+    video.style.top = `calc(50% + ${pan.y}px)`;
+    video.style.transform = 'translate(-50%, -50%)';
   } else {
     video.pause();
     video.hidden = true;
@@ -239,8 +255,9 @@ function syncControls(next) {
   $('#remove-button').disabled = !next.has_image || next.image_loading || next.job.running;
   $('#reset-module').disabled = !next.has_image || next.image_loading || next.job.running;
   $('#scale-slider').disabled = !next.has_image || next.image_loading || next.job.running;
-  $('#scale-slider').value = Math.round((next.scale || 1) * 100);
-  $('#scale-label').textContent = `${Math.round((next.scale || 1) * 100)}%`;
+  const scale = pendingScale?.entryId === next.current_id ? pendingScale.value : next.scale || 1;
+  $('#scale-slider').value = Math.round(scale * 100);
+  $('#scale-label').textContent = `${Math.round(scale * 100)}%`;
   $('#dimensions').textContent = next.image_size ? `${next.image_size[0]} × ${next.image_size[1]}` : '-- × --';
 
   const job = next.job;
@@ -267,12 +284,22 @@ function syncControls(next) {
   $('#video-play').setAttribute('aria-label', videoPlayer.paused ? 'Play video' : 'Pause video');
   if (next.video) {
     syncVideoTimeline();
+    const videoScale = pendingScale?.entryId === next.current_id ? pendingScale.value : next.scale || 1;
+    if (document.activeElement !== $('#video-zoom')) {
+      $('#video-zoom').value = Math.round(videoScale * 100);
+    }
+    $('#video-zoom-label').value = `${Math.round(videoScale * 100)}%`;
+    $('#video-zoom').disabled = job.running;
+    $('#video-size').textContent = videoNativeSize ? 'Fit' : '1:1';
+    $('#video-size').title = videoNativeSize ? 'Fit video to canvas' : 'View at original pixel size';
+    $('#video-size').setAttribute('aria-label', $('#video-size').title);
     $('#video-seek').disabled = job.running;
     $('#video-play').disabled = job.running;
     $('#video-rewind').disabled = job.running;
     $('#video-step-back').disabled = job.running;
     $('#video-step-forward').disabled = job.running;
     $('#video-forward').disabled = job.running;
+    $('#video-size').disabled = job.running;
     $('#video-volume').disabled = job.running;
     $('#save-video-frame').disabled = job.running;
     $('#save-video-frame-side').disabled = job.running;
@@ -307,6 +334,15 @@ async function fetchAndApplyState() {
           ? next.settings.effects.Inversion
           : next.settings.enhancement[key];
       if (Object.is(actual, value)) pendingSettings.delete(key);
+    }
+    if (pendingScale) {
+      if (pendingScale.entryId !== next.current_id) {
+        pendingScale = null;
+      } else if (Math.abs(next.scale - pendingScale.value) < 0.001) {
+        pendingScale = null;
+      } else {
+        next.scale = pendingScale.value;
+      }
     }
     if (previousId && previousId !== next.current_id) panById.set(previousId, pan);
     if (!previousId || previousId !== next.current_id) pan = panById.get(next.current_id) || { x: 0, y: 0 };
@@ -368,11 +404,38 @@ async function flushSettings() {
   }
 }
 
-function setScale(value) {
+function setScale(value, anchor = null) {
   if (!state?.has_image) return;
   const scale = Number(value) / 100;
+  const stage = $('#stage');
+  const media = state.kind === 'video' ? videoPlayer : $('#preview-image');
+  const stageRect = stage.getBoundingClientRect();
+  const mediaRect = media.getBoundingClientRect();
+  const sourceWidth = state.kind === 'video' ? videoPlayer.videoWidth || state.image_size[0] : state.image_size[0];
+  const sourceHeight = state.kind === 'video' ? videoPlayer.videoHeight || state.image_size[1] : state.image_size[1];
+  const fit = Math.min((stage.clientWidth - 64) / sourceWidth, (stage.clientHeight - 64) / sourceHeight, 1);
+  const newWidth = sourceWidth * fit * scale;
+  const newHeight = sourceHeight * fit * scale;
+  const anchorX = anchor?.x ?? (stageRect.left + stageRect.width / 2);
+  const anchorY = anchor?.y ?? (stageRect.top + stageRect.height / 2);
+  const relativeX = Math.max(0, Math.min(1, (anchorX - mediaRect.left) / mediaRect.width));
+  const relativeY = Math.max(0, Math.min(1, (anchorY - mediaRect.top) / mediaRect.height));
+  const maxPanX = Math.max(0, (newWidth - stageRect.width) / 2);
+  const maxPanY = Math.max(0, (newHeight - stageRect.height) / 2);
+  pan.x = Math.max(-maxPanX, Math.min(maxPanX,
+    anchorX - stageRect.left - (relativeX - 0.5) * newWidth - stageRect.width / 2));
+  pan.y = Math.max(-maxPanY, Math.min(maxPanY,
+    anchorY - stageRect.top - (relativeY - 0.5) * newHeight - stageRect.height / 2));
   state.scale = scale;
-  $('#scale-label').textContent = `${Math.round(value)}%`;
+  pendingScale = { entryId: state.current_id, value: scale };
+  if (state.kind === 'video') {
+    videoNativeSize = false;
+    $('#video-zoom-label').value = `${Math.round(value)}%`;
+    $('#video-size').textContent = '1:1';
+    $('#video-size').title = 'View at original pixel size';
+  } else {
+    $('#scale-label').textContent = `${Math.round(value)}%`;
+  }
   applyPreview(state);
   clearTimeout(scaleTimer);
   scaleTimer = setTimeout(() => runAction('set_scale', scale), 50);
@@ -429,6 +492,14 @@ $('#video-play').addEventListener('click', async () => {
   }
   syncVideoTimeline();
 });
+$('#video-size').addEventListener('click', () => {
+  videoNativeSize = !videoNativeSize;
+  pan = { x: 0, y: 0 };
+  if (state) applyPreview(state);
+  $('#video-size').textContent = videoNativeSize ? 'Fit' : '1:1';
+  $('#video-size').title = videoNativeSize ? 'Fit video to canvas' : 'View at original pixel size';
+});
+$('#video-zoom').addEventListener('input', (event) => setScale(event.target.value));
 $('#video-rewind').addEventListener('click', () => seekVideo(videoPlayer.currentTime - 10));
 $('#video-forward').addEventListener('click', () => seekVideo(videoPlayer.currentTime + 10));
 $('#video-step-back').addEventListener('click', () => {
@@ -498,7 +569,7 @@ window.addEventListener('pointermove', (event) => {
     Object.assign($('#crop-box').style, { left: `${left}px`, top: `${top}px`, width: `${Math.max(0, right - left)}px`, height: `${Math.max(0, bottom - top)}px` });
   } else if (dragStart) {
     const stage = $('#stage');
-    const image = $('#preview-image');
+    const image = state?.kind === 'video' ? videoPlayer : $('#preview-image');
     const maxX = Math.max(0, (image.clientWidth - stage.clientWidth) / 2);
     const maxY = Math.max(0, (image.clientHeight - stage.clientHeight) / 2);
     pan.x = Math.max(-maxX, Math.min(maxX, dragStart.panX + event.clientX - dragStart.x));
@@ -541,19 +612,13 @@ window.addEventListener('keydown', (event) => {
 $('#stage').addEventListener('wheel', (event) => {
   if (!event.shiftKey || !state?.has_image) return;
   event.preventDefault();
-  const current = Number($('#scale-slider').value);
+  const current = state.kind === 'video' && videoNativeSize
+    ? 100
+    : Number(state.scale || 1) * 100;
   const next = Math.max(10, Math.min(500, current + (event.deltaY < 0 ? 15 : -15)));
-  const stageRect = $('#stage').getBoundingClientRect();
-  const imageRect = $('#preview-image').getBoundingClientRect();
-  const relativeX = (event.clientX - (imageRect.left + imageRect.width / 2)) / imageRect.width;
-  const relativeY = (event.clientY - (imageRect.top + imageRect.height / 2)) / imageRect.height;
-  const zoomRatio = next / current;
-  const newWidth = imageRect.width * zoomRatio;
-  const newHeight = imageRect.height * zoomRatio;
-  pan.x = event.clientX - stageRect.left - relativeX * newWidth - stageRect.width / 2;
-  pan.y = event.clientY - stageRect.top - relativeY * newHeight - stageRect.height / 2;
-  $('#scale-slider').value = next;
-  updateScale(next);
+  if (state.kind === 'video') $('#video-zoom').value = next;
+  else $('#scale-slider').value = next;
+  setScale(next, { x: event.clientX, y: event.clientY });
 }, { passive: false });
 window.addEventListener('resize', () => { if (state) applyPreview(state); });
 
