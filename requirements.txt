@@ -5,7 +5,7 @@ glfw==2.9.0
 numpy==1.26.4
 onnx==1.21.0
 onnxruntime-directml==1.24.4
-opencv-python==4.9.0.80
+opencv-contrib-python==4.9.0.80
 pillow==10.3.0
 pywebview>=5.4
 PyOpenGL==3.1.7

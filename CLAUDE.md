@@ -31,7 +31,8 @@ pip install -r requirements.txt
 - **core/application.py** owns image/history state, applies effects, handles native file dialogs, and runs long operations.
 - **core/processing/** contains reusable effects, resizing, tiling, and resolution operations.
 - **core/models/** contains the project's ONNX and GFPGAN model wrappers and architectures.
-- **core/constants.py** holds the shared project path and image tiling configuration.
+- **core/config/constants.py** holds the shared project path and image tiling configuration.
+- **core/services/** contains application services such as logging and local video streaming.
 
 ### Module System
 
@@ -55,7 +56,7 @@ Each imported, cropped, or processed image creates a Python history entry contai
 
 ### Tiling Strategy (`core/processing/tiling.py`, `core/models/onnx_realesrganer.py`)
 
-Large images are split into tiles, processed independently (manages VRAM), then stitched. The ONNX path uses fixed-size IOBinding buffers for interior tiles and a CPU prefetch thread to overlap data prep with GPU inference. Tile size and overlap defaults live in `core/constants.py`.
+Large images are split into tiles, processed independently (manages VRAM), then stitched. The ONNX path uses fixed-size IOBinding buffers for interior tiles and a CPU prefetch thread to overlap data prep with GPU inference. Tile size and overlap defaults live in `core/config/constants.py`.
 
 ### Canvas Interaction
 
@@ -100,3 +101,12 @@ weights/
 ## Progress Events
 
 Use `core.progress.report_progress()` for tiled work. It sends a structured dictionary containing the stage, current item, total, unit, and percentage. The controller continues to accept numeric progress values for compatibility.
+
+### Video Upscaling
+
+- Local video export uses one persistent ONNX upscaler for the complete frame sequence and writes an MP4 in a background job.
+- Real-time preview uses a bounded latest-frame MJPEG stream from `core/services/realtime_video.py`; frames are not transferred through the pywebview API.
+- The default real-time preview mode is CPU `resize + sharpen` to 1920x1080 with letterboxing. RealESRGAN is selectable as an AI preview option but is not the speed-focused default.
+- Network stream ingestion is not part of the local-video MVP. Add it only after measuring local-file throughput and validating an FFmpeg/stream URL lifecycle.
+- CPU-first speed benchmarks use `scripts/benchmark_video_upscaling.py` with ESPCN/FSRCNN x2 and a 1920x1080 target. Missing lightweight weights are downloaded into ignored `weights/realtime/` only when `--download` is supplied.
+- The benchmark processes every frame and reports actual end-to-end FPS; it does not skip frames to make a real-time claim.

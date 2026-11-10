@@ -1,5 +1,7 @@
 import { bindAdjustControls, syncAdjustControls } from './modules/adjust.js';
 import { bindEnhanceControls, syncEnhanceControls } from './modules/enhance.js';
+import { bindCanvasControls } from './modules/canvas.js';
+import { bindVideoControls } from './modules/video.js';
 
 const $ = (selector) => document.querySelector(selector);
 const SLIDER_SETTING_KEYS = new Set(['Brightness', 'Color', 'Contrast', 'Sharpness', 'Blur']);
@@ -8,9 +10,6 @@ let pan = { x: 0, y: 0 };
 let videoNativeSize = false;
 const panById = new Map();
 const videoPlayer = document.querySelector('#video-player');
-let lastVideoPositionSync = 0;
-let dragStart = null;
-let cropStart = null;
 let toastTimer = null;
 let settingTimer = null;
 let scaleTimer = null;
@@ -19,10 +18,11 @@ const pendingSettings = new Map();
 let settingsFlushInProgress = false;
 let stateRefreshQueued = false;
 let stateRefreshPromise = null;
-let cropMode = false;
 let imageLoading = false;
 let imageLoadToken = 0;
 let resultPreviewId = null;
+let jobPollTimer = null;
+let jobPollInFlight = false;
 
 function callApi(method, ...args) {
   const api = window.pywebview?.api;
@@ -85,16 +85,112 @@ function syncVideoTimeline() {
   if (document.activeElement !== volume) {
     volume.value = videoPlayer.muted ? 0 : videoPlayer.volume;
   }
+  $('#video-mute').textContent = videoPlayer.muted ? '🔇' : '🔊';
+  $('#video-mute').title = videoPlayer.muted ? 'Unmute' : 'Mute';
+  $('#video-mute').setAttribute('aria-label', $('#video-mute').title);
+}
+
+function showVideoExportStarting() {
+  $('#job-overlay').hidden = false;
+  $('#job-status').textContent = 'Starting video export';
+  $('#job-percent').textContent = '0%';
+  $('#progress-fill').style.width = '0%';
+  $('.progress-track').classList.remove('indeterminate');
+  $('#cancel-job').hidden = false;
+  $('#cancel-job').disabled = false;
+  $('#cancel-job').textContent = 'Cancel';
+  $('#job-detail').textContent = 'Preparing video frames';
+}
+
+function syncJobOverlay(job) {
+  const exporting = job.kind === 'export';
+  $('#job-overlay').hidden = !(job.running || job.status === 'Cancelling');
+  $('#job-status').textContent = exporting ? 'Exporting image' : job.status || 'Processing image';
+  $('#job-percent').textContent = exporting ? 'Saving' : `${job.progress || 0}%`;
+  $('#progress-fill').style.width = `${job.progress || 0}%`;
+  $('.progress-track').classList.toggle('indeterminate', exporting);
+  $('#cancel-job').hidden = exporting || !job.running;
+  $('#cancel-job').disabled = job.status === 'Cancelling';
+  $('#cancel-job').textContent = job.status === 'Cancelling' ? 'Cancelling…' : 'Cancel';
+  $('#job-detail').textContent = exporting
+    ? 'Applying effects and writing the image'
+    : job.kind === 'video_export'
+      ? `${job.current || 0}/${job.total || 0} frames · ${Number(job.fps || 0).toFixed(2)} FPS · ${formatDuration(job.duration)}`
+      : job.total
+        ? `${job.stage.replaceAll('-', ' ')} · ${job.current}/${job.total} ${job.unit}${job.total === 1 ? '' : 's'}`
+        : 'Preparing image';
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds)) return '00:00';
+  const value = Math.max(0, Math.floor(seconds));
+  return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+}
+
+function formatDebugSize(size) {
+  return size ? `${size[0]} × ${size[1]} px` : '—';
+}
+
+function formatDebugDuration(seconds) {
+  if (!Number.isFinite(seconds)) return '—';
+  const value = Math.max(0, Math.round(seconds));
+  return `${String(Math.floor(value / 3600)).padStart(2, '0')}:${String(Math.floor((value % 3600) / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+}
+
+function formatDebugBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes;
+  let unit = 'B';
+  for (const nextUnit of units) {
+    value /= 1024;
+    unit = nextUnit;
+    if (value < 1024 || nextUnit === units[units.length - 1]) break;
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
+}
+
+function syncDebugPanel(next) {
+  const panel = $('#debug-panel');
+  panel.hidden = !$('#debug-toggle').checked;
+  if (!panel.hidden) {
+    const info = next.media_info;
+    $('#debug-status').textContent = info ? info.type.toUpperCase() : 'No media';
+    const rows = info ? [
+      ['Name', info.name],
+      ['Type', info.type],
+      ['Native resolution', formatDebugSize(info.native_size)],
+      ['Current resolution', formatDebugSize(info.current_size)],
+      ['Duration', formatDebugDuration(info.duration)],
+      ['FPS', Number.isFinite(info.fps) ? info.fps.toFixed(3) : '—'],
+      ['Frames', Number.isFinite(info.frame_count) ? info.frame_count.toLocaleString() : '—'],
+      ['File size', formatDebugBytes(info.file_size)],
+      ['Format', info.extension ? info.extension.toUpperCase() : '—'],
+      ['Path', info.path || '—'],
+    ] : [];
+    const grid = $('#debug-grid');
+    grid.replaceChildren();
+    rows.forEach(([label, value]) => {
+      const key = document.createElement('dt');
+      key.textContent = label;
+      const data = document.createElement('dd');
+      data.textContent = value;
+      grid.append(key, data);
+    });
+  }
 }
 
 function applyPreview(next) {
   const stage = $('#stage');
   const image = $('#preview-image');
+  const realtimeVideo = $('#realtime-video');
   const video = $('#video-player');
   if (!next?.has_image) {
     video.pause();
     video.hidden = true;
     image.hidden = true;
+    realtimeVideo.hidden = true;
     $('#empty-state').hidden = false;
     $('#stage-info').hidden = true;
     return;
@@ -105,8 +201,10 @@ function applyPreview(next) {
   const fit = Math.min((stage.clientWidth - inset) / width, (stage.clientHeight - inset) / height, 1);
   const zoom = next.scale || 1;
   if (next.kind === 'video' && next.video?.url) {
+    const realtime = Boolean(next.video.realtime_url && next.video.realtime_running);
     image.hidden = true;
-    video.hidden = false;
+    realtimeVideo.hidden = !realtime;
+    video.hidden = realtime;
     const changedEntry = video.dataset.entryId !== next.current_id;
     if (changedEntry) {
       videoNativeSize = false;
@@ -122,14 +220,29 @@ function applyPreview(next) {
       video.pause();
       video.currentTime = next.video.position || 0;
     }
-    const videoWidth = video.videoWidth || width;
-    const videoHeight = video.videoHeight || height;
-    const videoScale = videoNativeSize ? 1 : fit * zoom;
-    video.style.width = `${Math.max(1, videoWidth * videoScale)}px`;
-    video.style.height = `${Math.max(1, videoHeight * videoScale)}px`;
-    video.style.left = `calc(50% + ${pan.x}px)`;
-    video.style.top = `calc(50% + ${pan.y}px)`;
-    video.style.transform = 'translate(-50%, -50%)';
+    const outputOption = next.video.output_options?.find(
+      (option) => option.factor === next.settings.enhancement.factor,
+    );
+    const videoWidth = realtime ? outputOption?.width || width : video.videoWidth || width;
+    const videoHeight = realtime ? outputOption?.height || height : video.videoHeight || height;
+    const displayFit = realtime
+      ? Math.min(
+        (stage.clientWidth - inset) / videoWidth,
+        (stage.clientHeight - inset) / videoHeight,
+        1,
+      )
+      : fit;
+    const videoScale = videoNativeSize ? 1 : displayFit * zoom;
+    const target = realtime ? realtimeVideo : video;
+    if (realtime && realtimeVideo.dataset.source !== next.video.realtime_url) {
+      realtimeVideo.dataset.source = next.video.realtime_url;
+      realtimeVideo.src = next.video.realtime_url;
+    }
+    target.style.width = `${Math.max(1, videoWidth * videoScale)}px`;
+    target.style.height = `${Math.max(1, videoHeight * videoScale)}px`;
+    target.style.left = `calc(50% + ${pan.x}px)`;
+    target.style.top = `calc(50% + ${pan.y}px)`;
+    target.style.transform = 'translate(-50%, -50%)';
   } else {
     video.pause();
     video.hidden = true;
@@ -259,20 +372,10 @@ function syncControls(next) {
   $('#scale-slider').value = Math.round(scale * 100);
   $('#scale-label').textContent = `${Math.round(scale * 100)}%`;
   $('#dimensions').textContent = next.image_size ? `${next.image_size[0]} × ${next.image_size[1]}` : '-- × --';
+  syncDebugPanel(next);
 
   const job = next.job;
-  const exporting = job.kind === 'export';
-  $('#job-overlay').hidden = !job.running;
-  $('#job-status').textContent = exporting ? 'Exporting image' : job.status || 'Processing image';
-  $('#job-percent').textContent = exporting ? 'Saving' : `${job.progress || 0}%`;
-  $('#progress-fill').style.width = `${job.progress || 0}%`;
-  $('.progress-track').classList.toggle('indeterminate', exporting);
-  $('#cancel-job').hidden = exporting;
-  $('#job-detail').textContent = exporting
-    ? 'Applying effects and writing the image'
-    : job.total
-      ? `${job.stage.replaceAll('-', ' ')} · ${job.current}/${job.total} ${job.unit}${job.total === 1 ? '' : 's'}`
-      : 'Preparing image';
+  syncJobOverlay(job);
   const previewHandoff = Boolean(resultPreviewId);
   $('#image-loading').hidden = !(imageLoading || previewHandoff);
   setBusy(job.running);
@@ -283,6 +386,20 @@ function syncControls(next) {
   $('#video-play').textContent = videoPlayer.paused ? '▶' : 'Ⅱ';
   $('#video-play').setAttribute('aria-label', videoPlayer.paused ? 'Play video' : 'Pause video');
   if (next.video) {
+    const resolution = $('#video-output-resolution');
+    const currentOptions = next.video.output_options || [];
+    resolution.replaceChildren(
+      ...currentOptions.map((option) => new Option(option.label, option.factor)),
+    );
+    resolution.value = String(next.settings.enhancement.factor);
+    resolution.disabled = job.running || next.video.realtime_running;
+    const videoModel = $('#video-model-select');
+    if (videoModel.dataset.factor !== String(next.settings.enhancement.factor)) {
+      videoModel.replaceChildren(...next.models.map((name) => new Option(name, name)));
+      videoModel.dataset.factor = String(next.settings.enhancement.factor);
+    }
+    videoModel.value = next.settings.enhancement.model;
+    $('#video-keep-size').checked = next.settings.enhancement.keep_size;
     syncVideoTimeline();
     const videoScale = pendingScale?.entryId === next.current_id ? pendingScale.value : next.scale || 1;
     if (document.activeElement !== $('#video-zoom')) {
@@ -304,6 +421,14 @@ function syncControls(next) {
     $('#save-video-frame').disabled = job.running;
     $('#save-video-frame-side').disabled = job.running;
     $('#crop-video-frame').disabled = job.running;
+      $('#video-realtime').disabled = job.running;
+        $('#save-video-button').disabled = job.running || next.video.realtime_running;
+        $('#video-realtime').textContent = next.video.realtime_running
+        ? 'Stop real-time preview'
+        : 'Start real-time preview';
+      $('#video-realtime-mode').value = next.video.realtime_mode || 'fast';
+      $('#video-realtime-mode').disabled = job.running || next.video.realtime_running;
+      $('#video-fullscreen').disabled = job.running;
   }
   if (job.status === 'Complete' || job.status === 'Cancelled') {
     callApi('dismiss_job');
@@ -374,9 +499,26 @@ async function refreshState() {
   }
 }
 
-async function pollState() {
-  await refreshState();
-  setTimeout(pollState, 150);
+async function pollJobState() {
+  if (jobPollInFlight) return;
+  jobPollInFlight = true;
+  try {
+    const job = await callApi('get_job_state');
+    syncJobOverlay(job);
+    if (!state || !job.running || ['Complete', 'Cancelled', 'Failed'].includes(job.status)) {
+      await refreshState();
+    }
+  } catch (error) {
+    setToast(`Could not read processing progress: ${error.message}`, 'error');
+  } finally {
+    jobPollInFlight = false;
+  }
+}
+
+function startPolling() {
+  if (jobPollTimer) return;
+  pollJobState();
+  jobPollTimer = setInterval(pollJobState, 150);
 }
 
 function setSetting(key, value) {
@@ -443,184 +585,55 @@ function setScale(value, anchor = null) {
 
 $('#open-button').addEventListener('click', importImage);
 $('#empty-open-button').addEventListener('click', importImage);
-$('#export-button').addEventListener('click', () => runAction('save_image'));
+$('#debug-toggle').addEventListener('change', () => syncDebugPanel(state || { media_info: null }));
+$('#export-button').addEventListener('click', () => {
+  if (state?.kind === 'video') {
+    showVideoExportStarting();
+    return runAction('save_video');
+  }
+  return runAction('save_image');
+});
+$('#save-video-button').addEventListener('click', () => {
+  showVideoExportStarting();
+  return runAction('save_video');
+});
 $('#remove-button').addEventListener('click', async () => {
   if (window.confirm('Remove this image and its edits?')) await runAction('remove_image');
 });
 $('#reset-module').addEventListener('click', () => runAction('reset_module'));
-$('#cancel-job').addEventListener('click', () => callApi('cancel_operation'));
+$('#cancel-job').addEventListener('click', async () => {
+  $('#cancel-job').disabled = true;
+  try {
+    await callApi('cancel_operation');
+    await refreshState();
+  } catch (error) {
+    setToast(error.message, 'error');
+    $('#cancel-job').disabled = false;
+  }
+});
 document.querySelectorAll('.mode-tab').forEach((tab) => tab.addEventListener('click', () => runAction('set_module', tab.dataset.module)));
 bindAdjustControls(setSetting, runAction);
 bindEnhanceControls(setSetting, runAction);
 
-function syncVideoPosition(force = false) {
-  if (!state?.video || !Number.isFinite(videoPlayer.currentTime)) return;
-  syncVideoTimeline();
-  const now = performance.now();
-  if (force || now - lastVideoPositionSync >= 250) {
-    lastVideoPositionSync = now;
-    callApi('set_video_position', videoPlayer.currentTime).catch(() => {});
-  }
-}
+bindVideoControls({
+  $, callApi, runAction, getState: () => state, videoPlayer, syncVideoTimeline,
+  applyPreview, setScale, setToast,
+  setSetting,
+  getVideoNativeSize: () => videoNativeSize,
+  setVideoNativeSize: (value) => { videoNativeSize = value; },
+  getPan: () => pan,
+  setPan: (value) => { pan = value; },
+});
 
-function seekVideo(seconds) {
-  if (!state?.video || !Number.isFinite(videoPlayer.duration)) return;
-  videoPlayer.currentTime = Math.max(0, Math.min(videoPlayer.duration, seconds));
-  syncVideoPosition(true);
-}
-
-videoPlayer.addEventListener('loadedmetadata', () => {
-  if (state?.video && Number.isFinite(state.video.position)) {
-    videoPlayer.currentTime = Math.min(state.video.position, videoPlayer.duration || state.video.position);
-  }
-  syncVideoTimeline();
-});
-videoPlayer.addEventListener('timeupdate', () => syncVideoPosition());
-videoPlayer.addEventListener('pause', () => syncVideoPosition(true));
-videoPlayer.addEventListener('ended', () => syncVideoPosition(true));
-videoPlayer.addEventListener('volumechange', syncVideoTimeline);
-$('#video-play').addEventListener('click', async () => {
-  if (!state?.video) return;
-  if (videoPlayer.paused) {
-    try {
-      await videoPlayer.play();
-    } catch (error) {
-      setToast(`Could not play video: ${error.message}`, 'error');
-    }
-  } else {
-    videoPlayer.pause();
-  }
-  syncVideoTimeline();
-});
-$('#video-size').addEventListener('click', () => {
-  videoNativeSize = !videoNativeSize;
-  pan = { x: 0, y: 0 };
-  if (state) applyPreview(state);
-  $('#video-size').textContent = videoNativeSize ? 'Fit' : '1:1';
-  $('#video-size').title = videoNativeSize ? 'Fit video to canvas' : 'View at original pixel size';
-});
-$('#video-zoom').addEventListener('input', (event) => setScale(event.target.value));
-$('#video-rewind').addEventListener('click', () => seekVideo(videoPlayer.currentTime - 10));
-$('#video-forward').addEventListener('click', () => seekVideo(videoPlayer.currentTime + 10));
-$('#video-step-back').addEventListener('click', () => {
-  videoPlayer.pause();
-  seekVideo(videoPlayer.currentTime - 1 / (state?.video?.fps || 30));
-});
-$('#video-step-forward').addEventListener('click', () => {
-  videoPlayer.pause();
-  seekVideo(videoPlayer.currentTime + 1 / (state?.video?.fps || 30));
-});
-$('#video-volume').addEventListener('input', (event) => {
-  const volume = Number(event.target.value);
-  videoPlayer.volume = volume;
-  videoPlayer.muted = volume === 0;
-  syncVideoTimeline();
-});
-$('#video-seek').addEventListener('input', (event) => {
-  if (Number.isFinite(videoPlayer.duration)) {
-    seekVideo((Number(event.target.value) / 1000) * videoPlayer.duration);
-  }
-});
-$('#save-video-frame').addEventListener('click', () => runAction('save_video_frame', videoPlayer.currentTime));
-$('#save-video-frame-side').addEventListener('click', () => runAction('save_video_frame', videoPlayer.currentTime));
-$('#crop-video-frame').addEventListener('click', () => {
-  cropMode = true;
-  $('#stage').classList.add('cropping');
-  $('#crop-button').classList.add('active');
-  setToast('Drag over the current frame to create a cropped image.');
+bindCanvasControls({
+  $, getState: () => state, getPan: () => pan, setPan: (value) => { pan = value; },
+  applyPreview, setScale, runAction, setToast, videoPlayer,
+  getVideoNativeSize: () => videoNativeSize,
 });
 
 function updateScale(value) {
   setScale(value);
 }
-$('#scale-slider').addEventListener('input', (event) => updateScale(event.target.value));
-$('#fit-button').addEventListener('click', () => updateScale(100));
-$('#reset-scale-button').addEventListener('click', () => updateScale(100));
 
-$('#crop-button').addEventListener('click', () => {
-  cropMode = !cropMode;
-  $('#stage').classList.toggle('cropping', cropMode);
-  $('#crop-button').classList.toggle('active', cropMode);
-  setToast(cropMode ? 'Drag over the image to crop. Press Escape to cancel.' : 'Crop selection cancelled.');
-});
-$('#stage').addEventListener('pointerdown', (event) => {
-  if (!state?.has_image) return;
-  if (cropMode || event.ctrlKey) {
-    cropStart = { x: event.clientX, y: event.clientY };
-    $('#crop-box').hidden = false;
-    $('#crop-box').style.left = `${cropStart.x - $('#stage').getBoundingClientRect().left}px`;
-    $('#crop-box').style.top = `${cropStart.y - $('#stage').getBoundingClientRect().top}px`;
-    $('#crop-box').style.width = '0px';
-    $('#crop-box').style.height = '0px';
-    event.preventDefault();
-  } else if (event.shiftKey) {
-    dragStart = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
-    $('#stage').setPointerCapture(event.pointerId);
-    event.preventDefault();
-  }
-});
-window.addEventListener('pointermove', (event) => {
-  if (cropStart) {
-    const stageRect = $('#stage').getBoundingClientRect();
-    const left = Math.max(0, Math.min(cropStart.x, event.clientX) - stageRect.left);
-    const top = Math.max(0, Math.min(cropStart.y, event.clientY) - stageRect.top);
-    const right = Math.min(stageRect.width, Math.max(cropStart.x, event.clientX) - stageRect.left);
-    const bottom = Math.min(stageRect.height, Math.max(cropStart.y, event.clientY) - stageRect.top);
-    Object.assign($('#crop-box').style, { left: `${left}px`, top: `${top}px`, width: `${Math.max(0, right - left)}px`, height: `${Math.max(0, bottom - top)}px` });
-  } else if (dragStart) {
-    const stage = $('#stage');
-    const image = state?.kind === 'video' ? videoPlayer : $('#preview-image');
-    const maxX = Math.max(0, (image.clientWidth - stage.clientWidth) / 2);
-    const maxY = Math.max(0, (image.clientHeight - stage.clientHeight) / 2);
-    pan.x = Math.max(-maxX, Math.min(maxX, dragStart.panX + event.clientX - dragStart.x));
-    pan.y = Math.max(-maxY, Math.min(maxY, dragStart.panY + event.clientY - dragStart.y));
-    applyPreview(state);
-  }
-});
-window.addEventListener('pointerup', async (event) => {
-  if (cropStart) {
-    const start = cropStart;
-    cropStart = null;
-    $('#crop-box').hidden = true;
-    if (cropMode) {
-      cropMode = false;
-      $('#stage').classList.remove('cropping');
-      $('#crop-button').classList.remove('active');
-    }
-    const displayedImage = state?.kind === 'video' ? videoPlayer : $('#preview-image');
-    const imageRect = displayedImage.getBoundingClientRect();
-    const left = Math.max(0, Math.min(start.x, event.clientX) - imageRect.left) / imageRect.width;
-    const top = Math.max(0, Math.min(start.y, event.clientY) - imageRect.top) / imageRect.height;
-    const right = Math.min(imageRect.width, Math.max(start.x, event.clientX) - imageRect.left) / imageRect.width;
-    const bottom = Math.min(imageRect.height, Math.max(start.y, event.clientY) - imageRect.top) / imageRect.height;
-    if (right > left && bottom > top) {
-      const position = state?.kind === 'video' ? videoPlayer.currentTime : undefined;
-      await runAction('crop_image', [left, top, right, bottom], position);
-    }
-  }
-  dragStart = null;
-});
-window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
-    cropStart = null;
-    cropMode = false;
-    $('#crop-box').hidden = true;
-    $('#stage').classList.remove('cropping');
-    $('#crop-button').classList.remove('active');
-  }
-});
-$('#stage').addEventListener('wheel', (event) => {
-  if (!event.shiftKey || !state?.has_image) return;
-  event.preventDefault();
-  const current = state.kind === 'video' && videoNativeSize
-    ? 100
-    : Number(state.scale || 1) * 100;
-  const next = Math.max(10, Math.min(500, current + (event.deltaY < 0 ? 15 : -15)));
-  if (state.kind === 'video') $('#video-zoom').value = next;
-  else $('#scale-slider').value = next;
-  setScale(next, { x: event.clientX, y: event.clientY });
-}, { passive: false });
-window.addEventListener('resize', () => { if (state) applyPreview(state); });
-
-if (window.pywebview?.api) pollState();
-else window.addEventListener('pywebviewready', pollState, { once: true });
+if (window.pywebview?.api) startPolling();
+else window.addEventListener('pywebviewready', startPolling, { once: true });

@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from core.constants import ROOT_DIR
+from core.config.constants import ROOT_DIR
 
 LOG_DIRECTORY = Path(ROOT_DIR, "app_logs")
 LOG_DIRECTORY.mkdir(parents=True, exist_ok=True)

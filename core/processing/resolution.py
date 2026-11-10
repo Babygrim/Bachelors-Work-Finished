@@ -5,9 +5,9 @@ import os
 import numpy as np
 import cv2
 from time import time
-from core.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
+from core.config.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
 from core.processing.resize import resize_image
-from core.constants import ROOT_DIR
+from core.config.constants import ROOT_DIR
 
 
 def multisampling(input_img, progress_bar_queue, sample_rate):

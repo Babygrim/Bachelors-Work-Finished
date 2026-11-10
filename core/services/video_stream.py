@@ -10,6 +10,7 @@ class VideoStreamServer:
     def __init__(self):
         self._lock = threading.Lock()
         self._videos = {}
+        self._realtime = {}
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -49,7 +50,11 @@ class VideoStreamServer:
         return f"{self.address}/video/{token}"
 
     def _serve(self, handler, send_body):
-        token = unquote(urlparse(handler.path).path.removeprefix("/video/")).strip("/")
+        request_path = urlparse(handler.path).path
+        if request_path.startswith("/realtime/"):
+            self._serve_realtime(handler, send_body)
+            return
+        token = unquote(request_path.removeprefix("/video/")).strip("/")
         with self._lock:
             path = self._videos.get(token)
         if not path or not path.is_file():
@@ -114,6 +119,59 @@ class VideoStreamServer:
         except (BrokenPipeError, ConnectionResetError):
             return
 
+    def register_realtime(self, processor):
+        token = secrets.token_urlsafe(24)
+        with self._lock:
+            self._realtime[token] = processor
+        return f"{self.address}/realtime/{token}"
+
+    def unregister_realtime(self, url):
+        token = unquote(urlparse(url).path.removeprefix("/realtime/")).strip("/")
+        with self._lock:
+            processor = self._realtime.pop(token, None)
+        if processor:
+            processor.stop()
+
+    def _serve_realtime(self, handler, send_body):
+        token = unquote(urlparse(handler.path).path.removeprefix("/realtime/")).strip("/")
+        with self._lock:
+            processor = self._realtime.get(token)
+        if not processor:
+            handler.send_error(404)
+            return
+        if not send_body:
+            handler.send_response(200)
+            handler.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            handler.send_header("Access-Control-Allow-Origin", "*")
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            return
+
+        handler.send_response(200)
+        handler.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        handler.send_header("Access-Control-Allow-Origin", "*")
+        handler.send_header("Cache-Control", "no-cache, no-store")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        sequence = 0
+        try:
+            while processor.running or processor.error:
+                sequence, jpeg = processor.wait_for_frame(sequence)
+                if jpeg is None:
+                    if processor.error:
+                        break
+                    continue
+                handler.wfile.write(
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii")
+                    + jpeg
+                    + b"\r\n"
+                )
+                handler.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
     @staticmethod
     def _send_range_error(handler, size):
         handler.send_response(416)
@@ -122,5 +180,10 @@ class VideoStreamServer:
         handler.end_headers()
 
     def close(self):
+        with self._lock:
+            processors = list(self._realtime.values())
+            self._realtime.clear()
+        for processor in processors:
+            processor.stop()
         self._server.shutdown()
         self._server.server_close()

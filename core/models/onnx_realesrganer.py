@@ -7,7 +7,7 @@ import numpy as np
 import onnxruntime as ort
 import torch
 
-from core.constants import ROOT_DIR
+from core.config.constants import ROOT_DIR
 from core.progress import report_progress
 
 def _export_to_onnx(pth_path, onnx_path, scale, num_block=23, fp16=False):

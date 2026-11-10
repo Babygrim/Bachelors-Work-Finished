@@ -35,6 +35,14 @@ button { color: inherit; }
 .brand-caption { margin-top: 2px; }
 .top-actions { gap: 9px; }
 .image-name { max-width: 250px; margin-right: 12px; overflow: hidden; color: #aeb6b1; text-overflow: ellipsis; white-space: nowrap; }
+.debug-toggle { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; color: #aeb8b1; font: 10px var(--mono); cursor: pointer; user-select: none; }
+.debug-toggle input { width: 14px; height: 14px; margin: 0; accent-color: var(--lime); cursor: pointer; }
+.debug-panel { position: absolute; z-index: 20; top: 74px; right: 22px; width: min(440px, calc(100vw - 44px)); padding: 13px 15px; border: 1px solid #46524d; border-radius: 5px; background: rgba(25, 31, 29, .97); box-shadow: 0 12px 30px rgba(0, 0, 0, .35); }
+.debug-panel-head { display: flex; justify-content: space-between; margin-bottom: 10px; color: var(--lime); font: 500 10px var(--mono); }
+.debug-panel-head span + span { color: var(--muted); }
+.debug-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font: 10px var(--mono); }
+.debug-grid dt { color: var(--muted); }
+.debug-grid dd { min-width: 0; margin: 0; overflow: hidden; color: #e0e7df; text-overflow: ellipsis; white-space: nowrap; }
 .button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 13px; border: 1px solid transparent; border-radius: 5px; cursor: pointer; font-weight: 600; transition: background .16s ease, border-color .16s ease, transform .16s ease; }
 .button:hover:not(:disabled) { transform: translateY(-1px); }
 .button:disabled, button:disabled { opacity: .42; cursor: not-allowed; }
@@ -76,6 +84,9 @@ button { color: inherit; }
 .stage::after { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 36%, rgba(0, 0, 0, .25)); content: ''; }
 .preview-image { position: absolute; z-index: 1; max-width: none; max-height: none; object-fit: fill; user-select: none; filter: drop-shadow(0 8px 22px rgba(0, 0, 0, .38)); animation: image-arrive .26s ease-out; }
 .video-player { position: absolute; z-index: 1; background: #090c0b; object-fit: contain; }
+.realtime-video { position: absolute; z-index: 1; object-fit: contain; user-select: none; }
+.stage:fullscreen { width: 100vw; height: 100vh; background: #090c0b; }
+.stage:fullscreen .realtime-video, .stage:fullscreen .video-player { max-width: 100vw; max-height: 100vh; }
 @keyframes image-arrive { from { opacity: .65; transform: scale(.985); } to { opacity: 1; } }
 .empty-state { z-index: 1; display: flex; flex-direction: column; align-items: center; color: #b3bdb5; animation: fade-up .35s ease-out; }
 @keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -130,7 +141,7 @@ input[type=range] { width: 100%; height: 3px; accent-color: var(--lime); cursor:
 .switch input:checked + span::before { left: 18px; background: #f1ffdb; }
 .control-divider { height: 1px; margin: 18px 0; background: var(--line); }
 .full-button { width: 100%; justify-content: space-between; }
-.section-label { margin: 1px 0 11px; }
+.section-label { margin: 1px 0 4px; }
 .segmented { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border: 1px solid #38423d; border-radius: 5px; background: #171c1a; }
 .segmented button { min-height: 31px; border: 0; border-radius: 3px; background: transparent; color: #9aa69d; cursor: pointer; font: 600 12px var(--mono); }
 .segmented button:hover { color: #eaf0e7; }

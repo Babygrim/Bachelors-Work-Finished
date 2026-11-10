@@ -1,20 +1,25 @@
 import base64
 import io
 import multiprocessing
+import re
+import shutil
+import subprocess
 import threading
 import uuid
 from pathlib import Path
 from queue import Empty
 
 import cv2
+import numpy as np
 import webview
 from PIL import Image, ImageEnhance, ImageFilter
 
-from core.app_logging import log_toast
-from core.constants import ROOT_DIR
+from core.config.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE, ROOT_DIR
 from core.processing import effects as img_effects
 from core.processing import resolution as img_resolution
-from core.video_stream import VideoStreamServer
+from core.services.app_logging import log_toast
+from core.services.realtime_video import RealTimeVideoProcessor
+from core.services.video_stream import VideoStreamServer
 
 _native_window = None
 
@@ -97,6 +102,46 @@ class WebApp:
         if not weights.is_dir():
             return []
         return sorted({path.stem for path in weights.glob(f"{int(factor)}x-*.onnx")})
+
+    @staticmethod
+    def _realtime_model_factors():
+        realtime_weights = Path(ROOT_DIR, "weights", "realtime")
+        if not realtime_weights.is_dir():
+            return set()
+        factors = set()
+        for path in realtime_weights.iterdir():
+            match = re.search(r"_x(2|4|8)\.(?:pb|onnx)$", path.name, re.IGNORECASE)
+            if match:
+                factors.add(int(match.group(1)))
+        return factors
+
+    @classmethod
+    def _video_models_for_factor(cls, factor):
+        models = cls._models_for_factor(factor)
+        if models:
+            return models
+        if int(factor) in cls._realtime_model_factors():
+            return ["CPU resize and sharpen"]
+        return []
+
+    @classmethod
+    def _video_output_options(cls, entry):
+        source_width, source_height = entry["original_size"]
+        factors = [
+            factor for factor in (2, 4, 8)
+            if cls._models_for_factor(factor) or factor in cls._realtime_model_factors()
+        ]
+        if not factors:
+            factors = [1]
+        return [
+            {
+                "factor": factor,
+                "width": source_width * factor,
+                "height": source_height * factor,
+                "label": f"{source_width * factor} × {source_height * factor}",
+            }
+            for factor in factors
+        ]
 
     def _apply_effects(self, image, settings):
         settings = settings["effects"]
@@ -211,6 +256,7 @@ class WebApp:
         video_frame_count=0,
         video_frame_index=0,
         video_position=0.0,
+        source_path=None,
     ):
         entry = {
             "id": uuid.uuid4().hex[:12],
@@ -224,11 +270,22 @@ class WebApp:
             "video_frame_count": int(video_frame_count),
             "video_frame_index": int(video_frame_index),
             "video_position": float(video_position),
+            "source_path": str(source_path) if source_path else None,
+            "realtime_url": None,
+            "realtime_processor": None,
+            "realtime_mode": "fast",
             "name": name,
             "extension": extension or "png",
             "settings": self._default_settings(),
             "scale": 1.0,
         }
+        if kind == "video":
+            output_options = self._video_output_options(entry)
+            entry["settings"]["enhancement"]["factor"] = output_options[0]["factor"]
+            models = self._models_for_factor(output_options[0]["factor"])
+            entry["settings"]["enhancement"]["model"] = (
+                models[0] if models else "Fast CPU resize + sharpen"
+            )
         thumbnail = entry["image"].copy()
         thumbnail.thumbnail((150, 100), Image.Resampling.LANCZOS)
         entry["thumbnail_image"] = thumbnail
@@ -245,6 +302,44 @@ class WebApp:
     def get_state(self, previous_revision=None, previous_history_revision=None):
         with self._lock:
             entry = self._current()
+            media_info = None
+            if entry:
+                native_width, native_height = entry["original_size"]
+                current_width, current_height = native_width, native_height
+                duration = None
+                if entry["kind"] == "video":
+                    duration = (
+                        entry["video_frame_count"] / entry["video_fps"]
+                        if entry["video_fps"] > 0 else 0
+                    )
+                    selected_option = next(
+                        (
+                            option for option in self._video_output_options(entry)
+                            if option["factor"] == entry["settings"]["enhancement"]["factor"]
+                        ),
+                        None,
+                    )
+                    if entry["realtime_processor"] and selected_option:
+                        current_width = selected_option["width"]
+                        current_height = selected_option["height"]
+                file_size = None
+                if entry["source_path"]:
+                    try:
+                        file_size = Path(entry["source_path"]).stat().st_size
+                    except OSError:
+                        file_size = None
+                media_info = {
+                    "name": entry["name"],
+                    "type": entry["kind"],
+                    "extension": entry["extension"],
+                    "path": entry["source_path"],
+                    "native_size": [native_width, native_height],
+                    "current_size": [current_width, current_height],
+                    "duration": duration,
+                    "fps": entry["video_fps"] if entry["kind"] == "video" else None,
+                    "frame_count": entry["video_frame_count"] if entry["kind"] == "video" else None,
+                    "file_size": file_size,
+                }
             state = {
                 "module": self._module,
                 "revision": self._revision,
@@ -263,13 +358,27 @@ class WebApp:
                     "position": entry["video_position"],
                     "duration": entry["video_frame_count"] / entry["video_fps"]
                     if entry["video_fps"] > 0 else 0,
+                    "realtime_url": entry["realtime_url"],
+                    "realtime_mode": entry["realtime_mode"],
+                    "realtime_running": bool(
+                        entry["realtime_processor"]
+                        and entry["realtime_processor"].running
+                    ),
+                    "realtime_error": (
+                        entry["realtime_processor"].error
+                        if entry["realtime_processor"] else None
+                    ),
+                    "output_options": self._video_output_options(entry),
                 } if entry and entry["kind"] == "video" else None,
                 "image": None,
                 "image_size": None,
                 "image_name": None,
+                "media_info": media_info,
                 "settings": entry["settings"] if entry else self._default_settings(),
                 "scale": entry["scale"] if entry else 1.0,
-                "models": self._models_for_factor(entry["settings"]["enhancement"]["factor"])
+                "models": self._video_models_for_factor(entry["settings"]["enhancement"]["factor"])
+                if entry and entry["kind"] == "video"
+                else self._models_for_factor(entry["settings"]["enhancement"]["factor"])
                 if entry else self._models_for_factor(2),
                 "history": [
                     {
@@ -291,6 +400,10 @@ class WebApp:
                     state["image"] = self._preview_url
             self._message = None
             return state
+
+    def get_job_state(self):
+        with self._lock:
+            return dict(self._job)
 
     def open_image(self):
         current = self._current()
@@ -328,6 +441,7 @@ class WebApp:
                     path.suffix.lstrip("."),
                     original_size=original_size,
                     full_resolution=False,
+                    source_path=path,
                 )
                 self._module = "Image_Effects"
                 entry_id = self._current_id
@@ -370,6 +484,7 @@ class WebApp:
                 video_frame_count=frame_count,
                 video_frame_index=0,
                 video_position=0,
+                source_path=path,
             )
         return True
 
@@ -432,6 +547,227 @@ class WebApp:
         self._job_thread.start()
         return True
 
+    def save_video(self):
+        with self._lock:
+            entry = self._current()
+            if (
+                not entry
+                or entry["kind"] != "video"
+                or self._job["running"]
+                or (self._job_thread and self._job_thread.is_alive())
+                or not _native_window
+            ):
+                return False
+            options = dict(entry["settings"]["enhancement"])
+            if not options["model"]:
+                self._set_message("error", "No ONNX model is available for this scale.")
+                return False
+            default_name = f"{entry['name']}_{options['factor']}x.mp4"
+        selected = _native_window.create_file_dialog(
+            webview.FileDialog.SAVE,
+            save_filename=default_name,
+            file_types=("Video files (*.mp4)",),
+        )
+        if not selected:
+            return False
+        with self._lock:
+            self._job = {
+                "running": True,
+                "progress": 0,
+                "status": "Upscaling video",
+                "stage": "frames",
+                "current": 0,
+                "total": entry["video_frame_count"],
+                "unit": "frame",
+                "kind": "video_export",
+                "fps": entry["video_fps"],
+                "duration": (
+                    entry["video_frame_count"] / entry["video_fps"]
+                    if entry["video_fps"] > 0 else 0
+                ),
+                "error": None,
+            }
+            self._cancel_event = threading.Event()
+            self._touch()
+        self._job_thread = threading.Thread(
+            target=self._upscale_video_worker,
+            args=(entry["video_path"], selected[0], options, self._cancel_event),
+            daemon=True,
+        )
+        self._job_thread.start()
+        return True
+
+    def _upscale_video_worker(self, source_path, output_path, options, cancel_event):
+        capture = cv2.VideoCapture(str(source_path))
+        writer = None
+        silent_output = f"{output_path}.silent.mp4"
+        try:
+            if not capture.isOpened():
+                raise RuntimeError(f"Could not open video: {Path(source_path).name}")
+            fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+            total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            with self._lock:
+                self._job.update(
+                    fps=float(fps),
+                    duration=total / fps if fps else 0,
+                    total=total,
+                )
+                self._touch()
+            scale = int(options["factor"])
+            model_name = str(options["model"]).lower()
+            is_cpu_model = "cpu" in model_name or "resize" in model_name or "sharpen" in model_name
+            upscaler = None
+            if not is_cpu_model:
+                model_path = Path(ROOT_DIR, "weights", f"{options['model']}.onnx")
+                if not model_path.is_file():
+                    raise FileNotFoundError(f"Weight file not found: {model_path}")
+
+                from core.models.onnx_realesrganer import OnnxRealESRGANer
+
+                upscaler = OnnxRealESRGANer(
+                    scale=scale,
+                    pth_path=str(model_path),
+                    tile=IMAGE_TILE_SIZE,
+                    tile_pad=IMAGE_TILE_OVERLAP,
+                )
+            frame_index = 0
+            while not cancel_event.is_set():
+                success, frame = capture.read()
+                if not success:
+                    break
+                current_frame = frame_index + 1
+                with self._lock:
+                    self._job.update(
+                        status="Processing video",
+                        current=current_frame,
+                        total=total,
+                        progress=round(current_frame * 100 / total) if total else 0,
+                    )
+                    self._touch()
+                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGB")
+                image = self._apply_effects(image, {"effects": SLIDER_DEFAULTS | {"Inversion": False}})
+                source_frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                output_size = (frame.shape[1] * scale, frame.shape[0] * scale)
+                output = (
+                    upscaler.enhance(source_frame)
+                    if upscaler is not None
+                    else RealTimeVideoProcessor._process_frame(
+                        source_frame,
+                        None,
+                        output_size,
+                    )
+                )
+                if options["keep_size"]:
+                    output = cv2.resize(
+                        output,
+                        (frame.shape[1], frame.shape[0]),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                if writer is None:
+                    height, width = output.shape[:2]
+                    writer = cv2.VideoWriter(
+                        silent_output,
+                        cv2.VideoWriter_fourcc(*"mp4v"),
+                        fps,
+                        (width, height),
+                    )
+                    if not writer.isOpened():
+                        raise RuntimeError(f"Could not create video: {output_path}")
+                writer.write(output)
+                frame_index += 1
+                with self._lock:
+                    self._job.update(
+                        current=frame_index,
+                        total=total,
+                        progress=round(frame_index * 100 / total) if total else 0,
+                    )
+                    self._touch()
+            if cancel_event.is_set():
+                return
+            if writer is None:
+                raise RuntimeError("The video contains no readable frames.")
+            writer.release()
+            writer = None
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg:
+                subprocess.run(
+                    [
+                        ffmpeg,
+                        "-y",
+                        "-i",
+                        silent_output,
+                        "-i",
+                        str(source_path),
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "1:a?",
+                        "-c:v",
+                        "copy",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        str(output_path),
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+            else:
+                Path(silent_output).replace(output_path)
+        except Exception as error:
+            with self._lock:
+                self._job = {
+                    "running": False,
+                    "progress": 0,
+                    "status": "Failed",
+                    "kind": "video_export",
+                    "error": str(error),
+                }
+                self._message = {"type": "error", "text": str(error)}
+                self._touch()
+        else:
+            with self._lock:
+                self._job = {
+                    "running": False,
+                    "progress": 100,
+                    "status": "Complete",
+                    "kind": "video_export",
+                    "error": None,
+                }
+                self._message = {"type": "success", "text": "Video exported successfully."}
+                self._touch()
+        finally:
+            capture.release()
+            if writer is not None:
+                writer.release()
+            if cancel_event.is_set():
+                try:
+                    Path(output_path).unlink(missing_ok=True)
+                    Path(silent_output).unlink(missing_ok=True)
+                except OSError:
+                    pass
+                with self._lock:
+                    if self._job.get("status") != "Cancelled":
+                        self._job = {
+                            "running": False,
+                            "progress": 0,
+                            "status": "Cancelled",
+                            "current": self._job.get("current", 0),
+                            "total": self._job.get("total", 0),
+                            "unit": "frame",
+                            "kind": "video_export",
+                            "fps": self._job.get("fps", 0),
+                            "duration": self._job.get("duration", 0),
+                            "error": None,
+                        }
+                        self._touch()
+            else:
+                Path(silent_output).unlink(missing_ok=True)
+            with self._lock:
+                self._cancel_event = None
+
     def _export_image_worker(self, image, settings, path):
         try:
             image = self._apply_effects(image, settings)
@@ -483,6 +819,63 @@ class WebApp:
             self._revision += 1
         return True
 
+    def start_video_realtime(self, position=None, mode="fast"):
+        with self._lock:
+            entry = self._current()
+            if (
+                not entry
+                or entry["kind"] != "video"
+                or self._job["running"]
+                or mode not in ("fast", "ai")
+            ):
+                return False
+            if mode == "ai" and entry["settings"]["enhancement"]["model"] == "Fast CPU resize + sharpen":
+                self._set_message("error", "AI preview requires an ONNX model for the selected resolution.")
+                return False
+            if entry["realtime_processor"] and entry["realtime_processor"].running:
+                return True
+            output_option = next(
+                option for option in self._video_output_options(entry)
+                if option["factor"] == entry["settings"]["enhancement"]["factor"]
+            )
+            processor = RealTimeVideoProcessor(
+                entry["video_path"],
+                entry["settings"]["enhancement"]["model"],
+                entry["settings"]["enhancement"]["factor"],
+                mode=mode,
+                output_size=(output_option["width"], output_option["height"]),
+            )
+            entry["realtime_processor"] = processor
+            entry["realtime_url"] = self._video_stream.register_realtime(processor)
+            entry["realtime_mode"] = mode
+            start_position = (
+                entry["video_position"] if position is None else float(position)
+            )
+        try:
+            processor.start(start_position)
+        except Exception:
+            self._video_stream.unregister_realtime(entry["realtime_url"])
+            with self._lock:
+                entry["realtime_processor"] = None
+                entry["realtime_url"] = None
+            raise
+        with self._lock:
+            self._touch()
+        return True
+
+    def stop_video_realtime(self):
+        with self._lock:
+            entry = self._current()
+            if not entry or entry["kind"] != "video":
+                return False
+            url = entry["realtime_url"]
+            entry["realtime_url"] = None
+            entry["realtime_processor"] = None
+            self._touch()
+        if url:
+            self._video_stream.unregister_realtime(url)
+        return True
+
     @staticmethod
     def _capture_video_frame(video_path, position):
         capture = cv2.VideoCapture(video_path)
@@ -530,12 +923,25 @@ class WebApp:
                 factor = int(value)
                 if factor not in (2, 4, 8):
                     return False
+                if entry["kind"] == "video" and not any(
+                    option["factor"] == factor
+                    for option in self._video_output_options(entry)
+                ):
+                    return False
                 enhancement = entry["settings"]["enhancement"]
                 enhancement["factor"] = factor
-                models = self._models_for_factor(factor)
+                models = (
+                    self._video_models_for_factor(factor)
+                    if entry["kind"] == "video"
+                    else self._models_for_factor(factor)
+                )
                 enhancement["model"] = models[0] if models else ""
             elif key == "model":
-                choices = self._models_for_factor(entry["settings"]["enhancement"]["factor"])
+                choices = (
+                    self._video_models_for_factor(entry["settings"]["enhancement"]["factor"])
+                    if entry["kind"] == "video"
+                    else self._models_for_factor(entry["settings"]["enhancement"]["factor"])
+                )
                 if value not in choices:
                     return False
                 entry["settings"]["enhancement"][key] = value
@@ -577,12 +983,15 @@ class WebApp:
             entry = self._current()
             if self._job["running"] or not entry or entry["image_loading"]:
                 return False
+            realtime_url = entry["realtime_url"]
             self._entries = [item for item in self._entries if item["id"] != self._current_id]
             self._current_id = self._entries[-1]["id"] if self._entries else None
             current = self._current()
             self._module = "Image_Effects" if not current or current["kind"] == "image" else "Video_Enhancement"
             self._history_revision += 1
             self._touch(preview=True, immediate=True)
+        if realtime_url:
+            self._video_stream.unregister_realtime(realtime_url)
         return True
 
     def set_scale(self, scale):
@@ -643,6 +1052,8 @@ class WebApp:
         with self._lock:
             entry = self._current()
             if not entry or entry["image_loading"] or self._job["running"]:
+                return False
+            if entry["kind"] == "video":
                 return False
             image = self._apply_effects(entry["image"], entry["settings"])
             if operation == "denoise":
@@ -775,8 +1186,12 @@ class WebApp:
             if not self._job["running"] or not self._cancel_event:
                 return False
             self._cancel_event.set()
+            self._job["status"] = "Cancelled"
+            self._job["stage"] = "cancel"
+            self._job["running"] = False
             if self._process and self._process.is_alive():
                 self._process.terminate()
+            self._touch()
             return True
 
     def dismiss_job(self):
