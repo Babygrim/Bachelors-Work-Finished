@@ -22,6 +22,7 @@ export function syncEnhanceControls(next, pendingSettings) {
     ? pendingSettings.get('model')
     : enhancement.model;
   model.disabled = !next.models.length;
+  document.querySelector('#upscale-button').disabled = !next.models.length || next.job.running;
 }
 
 export function bindEnhanceControls(setSetting, runAction) {
@@ -38,6 +39,7 @@ export function bindEnhanceControls(setSetting, runAction) {
     setSetting('face_restoration', event.target.checked);
   });
   document.querySelector('#upscale-button').addEventListener('click', () => {
+    if (!document.querySelector('#model-select').value) return;
     runAction('start_operation', 'upscale');
   });
 }

@@ -104,6 +104,7 @@ class OnnxRealESRGANer:
 
         providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
         self.session = ort.InferenceSession(onnx_path, sess_options=sess_opts, providers=providers)
+        self.device = self.session.get_providers()[0]
         self.input_name  = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
 

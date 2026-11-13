@@ -1,13 +1,12 @@
 from PIL import Image
 from core.models.gfpganer import GFPGANer
 from core.models.onnx_realesrganer import OnnxRealESRGANer
-import os
 import numpy as np
 import cv2
 from time import time
 from core.config.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
+from core.models.weights import find_model
 from core.processing.resize import resize_image
-from core.config.constants import ROOT_DIR
 
 
 def multisampling(input_img, progress_bar_queue, sample_rate):
@@ -32,12 +31,10 @@ def multisampling(input_img, progress_bar_queue, sample_rate):
 
 ######### REAL ESRGAN UPSCALING
 def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restoration, upscale_factor):
-    model = model
-    weights_path = ROOT_DIR + f'/weights/{model}.onnx'
-    if not os.path.exists(weights_path):
-        raise FileNotFoundError(f"Weight file not found: {weights_path}")
-
     upscale_factor = int(upscale_factor)
+    weights_path = find_model(model, upscale_factor)
+    if weights_path is None:
+        raise FileNotFoundError(f"Weight file not found for model: {model}")
     outscale_factor = 1 / upscale_factor if keep_size else 1
 
     start_time = time()
@@ -45,7 +42,7 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
         # Face path: GFPGAN with ONNX-backed background upsampler.
         upscaler_ESRGAN = OnnxRealESRGANer(
             scale=upscale_factor,
-            pth_path=weights_path,
+            pth_path=str(weights_path),
             tile=IMAGE_TILE_SIZE,
             tile_pad=IMAGE_TILE_OVERLAP,
         )
@@ -59,7 +56,7 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
     else:
         upscaler = OnnxRealESRGANer(
             scale=upscale_factor,
-            pth_path=weights_path,
+            pth_path=str(weights_path),
             tile=IMAGE_TILE_SIZE,
             tile_pad=IMAGE_TILE_OVERLAP,
         )

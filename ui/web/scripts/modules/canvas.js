@@ -1,6 +1,6 @@
 export function bindCanvasControls({
   $, getState, getPan, setPan, applyPreview, setScale, runAction, setToast,
-  videoPlayer, getVideoNativeSize,
+  videoPlayer, pauseCurrentVideoForHistoryChange, getVideoNativeSize,
 }) {
   let cropMode = false;
   let cropStart = null;
@@ -84,7 +84,12 @@ export function bindCanvasControls({
       const bottom = Math.min(imageRect.height, Math.max(start.y, event.clientY) - imageRect.top) / imageRect.height;
       stopCropMode();
       if (right > left && bottom > top) {
-        const position = state?.kind === 'video' ? videoPlayer.currentTime : undefined;
+        await pauseCurrentVideoForHistoryChange();
+        const position = state?.kind === 'video'
+          ? state.video?.realtime_running
+            ? state.video.realtime_position
+            : videoPlayer.currentTime
+          : undefined;
         await runAction('crop_image', [left, top, right, bottom], position);
       }
     }

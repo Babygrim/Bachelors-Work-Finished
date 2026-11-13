@@ -1,4 +1,5 @@
 import logging
+import json
 from pathlib import Path
 
 from core.config.constants import ROOT_DIR
@@ -19,3 +20,11 @@ def log_toast(level, message):
     level_name = str(level).upper()
     log_method = getattr(logger, level_name.lower(), logger.info)
     log_method("toast[%s] %s", level_name, str(message))
+
+
+def log_event(event, **details):
+    logger.info(
+        "event=%s details=%s",
+        str(event),
+        json.dumps(details, ensure_ascii=False, default=str, sort_keys=True),
+    )

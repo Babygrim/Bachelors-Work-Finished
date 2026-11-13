@@ -59,14 +59,20 @@ def main() -> int:
     if removed:
         print(f"cleaned up {removed} stale file(s)\n")
 
-    pth_files = sorted(f for f in os.listdir(WEIGHTS_DIR) if f.lower().endswith('.pth'))
+    pth_files = sorted(
+        os.path.join(directory, fname)
+        for directory, _, filenames in os.walk(WEIGHTS_DIR)
+        for fname in filenames
+        if fname.lower().endswith('.pth')
+    )
     if not pth_files:
         print("No .pth files found.")
         return 0
 
     converted = 0
     skipped = 0
-    for fname in pth_files:
+    for pth_path in pth_files:
+        fname = os.path.basename(pth_path)
         lower = fname.lower()
         if any(s in lower for s in SKIP_SUBSTRINGS):
             print(f"skip (non-RRDBNet): {fname}")
@@ -79,7 +85,6 @@ def main() -> int:
             skipped += 1
             continue
 
-        pth_path = os.path.join(WEIGHTS_DIR, fname)
         base = os.path.splitext(pth_path)[0]
         fp32 = base + '_fp32.onnx'
         fp16 = base + '_fp16.onnx'

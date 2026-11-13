@@ -38,17 +38,27 @@
 
       <section class="editor-area">
         <div class="editor-toolbar">
-          <div class="mode-tabs" role="tablist" aria-label="Editor mode">
-            <button class="mode-tab selected" data-module="Image_Effects" id="adjust-tab" role="tab">Adjust</button>
-            <button class="mode-tab" data-module="Resolution_Enhancement" id="enhance-tab" role="tab">Enhance</button>
-            <button class="mode-tab" data-module="Video_Enhancement" id="video-tab" role="tab" disabled>Video</button>
-          </div>
+          <div class="editor-context" id="editor-context">Image</div>
           <div class="canvas-actions">
-            <button class="icon-button" id="crop-button" title="Crop with Ctrl + drag" aria-label="Crop image">⌗</button>
-            <button class="icon-button" id="reset-scale-button" title="Fit image" aria-label="Fit image">⤢</button>
+            <button class="icon-button" id="crop-button" title="Crop with Ctrl + drag" aria-label="Crop image" disabled>⌗</button>
+            <button class="icon-button" id="reset-scale-button" title="Fit image" aria-label="Fit image" disabled>⤢</button>
             <button class="icon-button danger-icon" id="remove-button" title="Remove image" aria-label="Remove image" disabled>×</button>
           </div>
         </div>
+
+        <footer class="video-toolbar" id="video-toolbar" hidden>
+          <button class="icon-button" id="video-rewind" title="Rewind 10 seconds" aria-label="Rewind 10 seconds" disabled>↶</button>
+          <button class="icon-button" id="video-step-back" title="Previous frame" aria-label="Previous frame" disabled>◀</button>
+          <button class="video-play-button" id="video-play" aria-label="Play video" disabled>▶</button>
+          <button class="icon-button" id="video-step-forward" title="Next frame" aria-label="Next frame" disabled>▶</button>
+          <button class="icon-button" id="video-forward" title="Forward 10 seconds" aria-label="Forward 10 seconds" disabled>↷</button>
+          <span class="video-time" id="video-time">00:00 / 00:00</span>
+          <input id="video-seek" type="range" min="0" max="1000" value="0" aria-label="Video position" disabled>
+          <div class="video-quality-control">
+            <button class="icon-button" id="video-realtime" title="Toggle real-time upscaling" aria-label="Toggle real-time upscaling" disabled>FX</button>
+            <select id="video-realtime-mode" aria-label="Real-time model" disabled></select>
+          </div>
+        </footer>
 
         <div class="stage" id="stage">
           <div class="empty-state" id="empty-state">
@@ -66,6 +76,10 @@
             <span class="loading-spinner" aria-hidden="true"></span>
             <span>Loading image</span>
           </div>
+          <div class="image-loading" id="realtime-loading" hidden aria-live="polite">
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <span>Upscaling frame</span>
+          </div>
           <div class="job-overlay" id="job-overlay" hidden>
             <div class="job-panel">
               <div class="job-top"><span id="job-status">Processing image</span><span class="job-percent" id="job-percent">0%</span></div>
@@ -76,34 +90,29 @@
         </div>
 
         <footer class="image-toolbar" id="image-toolbar">
-          <button class="text-button" id="fit-button">Fit</button>
-          <div class="scale-control"><span class="scale-label" id="scale-label">100%</span><input id="scale-slider" type="range" min="10" max="500" value="100" aria-label="Image scale"><span class="scale-end">500%</span></div>
+          <button class="text-button" id="fit-button" disabled>Fit</button>
+          <div class="scale-control"><span class="scale-label" id="scale-label">100%</span><input id="scale-slider" type="range" min="10" max="500" value="100" aria-label="Image scale" disabled><span class="scale-end">500%</span></div>
           <span class="dimensions" id="dimensions">-- × --</span>
         </footer>
-        <footer class="video-toolbar" id="video-toolbar" hidden>
-          <button class="icon-button" id="video-rewind" title="Rewind 10 seconds" aria-label="Rewind 10 seconds">↶</button>
-          <button class="icon-button" id="video-step-back" title="Previous frame" aria-label="Previous frame">◀</button>
-          <button class="video-play-button" id="video-play" aria-label="Play video">▶</button>
-          <button class="icon-button" id="video-step-forward" title="Next frame" aria-label="Next frame">▶</button>
-          <button class="icon-button" id="video-forward" title="Forward 10 seconds" aria-label="Forward 10 seconds">↷</button>
-          <button class="icon-button video-mute" id="video-mute" title="Mute" aria-label="Mute">🔊</button>
-          <label class="video-volume" title="Volume">
-            <input id="video-volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Video volume">
-          </label>
-          <button class="button button-quiet video-size-button" id="video-size" title="View at original pixel size">1:1</button>
+        <footer class="video-tools-bottom" id="video-tools-bottom" hidden>
+          <button class="button button-quiet video-size-button" id="video-size" title="View at original pixel size" disabled>1:1</button>
           <label class="video-zoom-control">
             <span>ZOOM</span>
             <output id="video-zoom-label">100%</output>
-            <input id="video-zoom" type="range" min="10" max="500" value="100" aria-label="Video zoom">
+            <input id="video-zoom" type="range" min="10" max="500" value="100" aria-label="Video zoom" disabled>
           </label>
-          <span class="video-time" id="video-time">00:00 / 00:00</span>
-          <input id="video-seek" type="range" min="0" max="1000" value="0" aria-label="Video position">
-          <button class="icon-button" id="video-fullscreen" title="Full-screen real-time preview" aria-label="Full-screen real-time preview">⛶</button>
+          <div class="video-audio-control">
+            <button class="icon-button video-mute" id="video-mute" title="Mute" aria-label="Mute" disabled>🔊</button>
+            <label class="video-volume" title="Volume">
+              <input id="video-volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Video volume" disabled>
+            </label>
+          </div>
+          <button class="icon-button" id="video-fullscreen" title="Full-screen real-time preview" aria-label="Full-screen real-time preview" disabled>⛶</button>
         </footer>
       </section>
 
       <aside class="inspector" id="inspector">
-        <div class="inspector-head"><div><div class="eyebrow" id="inspector-kicker">IMAGE EFFECTS</div><h2 id="inspector-title">Adjust</h2></div><button class="text-button reset-button" id="reset-module">Reset</button></div>
+        <div class="inspector-head"><div><div class="eyebrow" id="inspector-kicker">IMAGE TOOLS</div><h2 id="inspector-title">Image</h2></div><button class="text-button reset-button" id="reset-module" disabled>Reset</button></div>
         <div class="controls" id="effects-controls">
           <div class="control-group">
             <div class="control-label"><label for="brightness">Brightness</label><output data-output="Brightness">1.00</output></div>
@@ -146,28 +155,21 @@
         </div>
 
         <div class="controls" id="video-controls" hidden>
-          <button class="button button-secondary full-button" id="crop-video-frame">Crop current frame <span class="button-icon">⌗</span></button>
-          <button class="button button-secondary full-button video-action" id="save-video-frame-side" style="margin-bottom: 10px;">Save frame as image <span class="button-icon">↧</span></button>
+          <div class="section-label">FRAME ACTIONS</div>
+          <div class="video-actions">
+            <button class="button button-secondary full-button" id="crop-video-frame" disabled>Crop current frame <span class="button-icon">⌗</span></button>
+            <button class="button button-secondary full-button" id="save-video-frame-side" disabled>Save frame as image <span class="button-icon">↧</span></button>
+          </div>
           <div class="section-label">UPSCALE SETTINGS</div>
           <div class="control-group">
             <div class="control-label"><label for="video-output-resolution">Output resolution</label></div>
-            <select id="video-output-resolution"></select>
+            <select id="video-output-resolution" disabled></select>
           </div>
           <div class="control-group model-group">
             <div class="control-label"><label for="video-model-select">Model</label></div>
-            <select id="video-model-select"></select>
-            <button class="button button-primary full-button" id="save-video-button" style="margin-top: 5px;">Upscale and export video <span class="button-icon">↗</span></button>
+            <select id="video-model-select" disabled></select>
+            <button class="button button-primary full-button" id="save-video-button" disabled>Upscale video <span class="button-icon">↗</span></button>
           </div>
-          <div class="control-divider"></div>
-          <div class="section-label">CURRENT FRAME</div>
-          <div class="control-group">
-            <div class="control-label"><label for="video-realtime-mode">Live mode</label></div>
-            <select id="video-realtime-mode">
-              <option value="fast">Fast: resize + sharpen</option>
-              <option value="ai">AI: RealESRGAN</option>
-            </select>
-          </div>
-          <button class="button button-secondary full-button" id="video-realtime">Start real-time preview <span class="button-icon">▶</span></button>
         </div>
       </aside>
     </main>

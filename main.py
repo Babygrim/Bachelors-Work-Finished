@@ -13,6 +13,7 @@ if __name__ == "__main__":
         js_api=app,
         width=1440,
         height=900,
+        maximized=True,
         min_size=(980, 640),
     )
     app._bind_window(window)
