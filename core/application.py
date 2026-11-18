@@ -10,6 +10,7 @@ from PIL import Image, ImageEnhance, ImageFilter
 from core.config.constants import ROOT_DIR
 from core.processing import effects as img_effects
 from core.models.weights import models_for_factor
+from core.services.realtime_video import AMD_VIDEO_SR_MODEL
 from core.services.video_stream import VideoStreamServer
 from core.application_modules.media import MediaModule
 from core.application_modules.shared import SLIDER_DEFAULTS
@@ -82,25 +83,60 @@ class WebApp(MediaModule, VideoModule, OperationsModule):
     @staticmethod
     def _realtime_model_factors():
         realtime_weights = Path(ROOT_DIR, "weights", "realtime")
-        if not realtime_weights.is_dir():
-            return set()
         factors = set()
-        for path in realtime_weights.iterdir():
-            match = re.search(r"_x(2|4|8)\.(?:pb|onnx)$", path.name, re.IGNORECASE)
-            if match:
-                factors.add(int(match.group(1)))
+        if realtime_weights.is_dir():
+            for path in realtime_weights.iterdir():
+                match = re.search(r"_x(2|4|8)\.(?:pb|onnx)$", path.name, re.IGNORECASE)
+                if match:
+                    factors.add(int(match.group(1)))
+        if MediaModule._ffmpeg_path():
+            factors.update((2, 4))
         return factors
 
     @staticmethod
     def _realtime_models():
         realtime_weights = Path(ROOT_DIR, "weights", "realtime")
-        if not realtime_weights.is_dir():
-            return []
-        return sorted({
-            path.stem
-            for path in realtime_weights.iterdir()
-            if path.suffix.lower() in (".pb", ".onnx")
-        })
+        models = set()
+        if realtime_weights.is_dir():
+            models.update(
+                path.stem
+                for path in realtime_weights.iterdir()
+                if path.suffix.lower() in (".pb", ".onnx")
+            )
+        if MediaModule._ffmpeg_path():
+            models.add(AMD_VIDEO_SR_MODEL)
+        return sorted(models)
+
+    @classmethod
+    def _realtime_models_for_factor(cls, factor):
+        factor = int(factor)
+        models = []
+        for model in cls._realtime_models():
+            if model == AMD_VIDEO_SR_MODEL:
+                if factor in (2, 4):
+                    models.append(model)
+                continue
+            match = re.search(r"_x(2|4|8)$", model, re.IGNORECASE)
+            if match and int(match.group(1)) == factor:
+                models.append(model)
+        return models
+
+    @classmethod
+    def _realtime_output_options(cls, entry):
+        source_width, source_height = entry["original_size"]
+        options = []
+        for factor in (2, 4, 8):
+            models = cls._realtime_models_for_factor(factor)
+            if not models:
+                continue
+            options.append({
+                "factor": factor,
+                "width": source_width * factor,
+                "height": source_height * factor,
+                "label": f"{source_width * factor} × {source_height * factor}",
+                "models": models,
+            })
+        return options
 
     @classmethod
     def _video_models_for_factor(cls, factor):

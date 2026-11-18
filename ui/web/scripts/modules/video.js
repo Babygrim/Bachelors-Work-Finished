@@ -1,7 +1,7 @@
 export function bindVideoControls({
-  $, callApi, runAction, getState, videoPlayer, syncVideoTimeline,
+  $, callApi, runAction, getState, videoPlayer, realtimePlayer, syncVideoTimeline,
   applyPreview, setScale, setToast, getVideoNativeSize, setVideoNativeSize,
-  getPan, setPan, setSetting, pauseCurrentVideoForHistoryChange,
+  setPan, setSetting, pauseCurrentVideoForHistoryChange,
 }) {
   let lastPositionSync = 0;
   let pendingRealtimePosition = null;
@@ -38,6 +38,12 @@ export function bindVideoControls({
       if (pendingRealtimePosition !== null) {
         return pendingRealtimePosition;
       }
+      if (
+        state.video.realtime_transport === 'mse'
+        && realtimePlayer.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
+        return realtimePlayer.currentTime;
+      }
       return Number.isFinite(state.video.realtime_position)
         ? state.video.realtime_position
         : 0;
@@ -71,6 +77,14 @@ export function bindVideoControls({
     }
   }
 
+  async function pauseForStep() {
+    videoPlayer.pause();
+    const state = getState();
+    if (!state?.video?.realtime_running || state.video.realtime_paused) return;
+    if (state.video.realtime_transport === 'mse') realtimePlayer.pause();
+    await runAction('set_video_realtime_paused', true);
+  }
+
   videoPlayer.addEventListener('loadedmetadata', () => {
     const state = getState();
     if (state?.video && Number.isFinite(state.video.position)) {
@@ -82,16 +96,21 @@ export function bindVideoControls({
   videoPlayer.addEventListener('pause', () => syncVideoPosition(true));
   videoPlayer.addEventListener('ended', () => syncVideoPosition(true));
   videoPlayer.addEventListener('volumechange', syncVideoTimeline);
+  realtimePlayer.addEventListener('timeupdate', syncVideoTimeline);
 
   $('#video-play').addEventListener('click', async () => {
     const state = getState();
     if (!state?.video) return;
     try {
       if (state.video.realtime_running) {
-        await runAction(
-          'set_video_realtime_paused',
-          !state.video.realtime_paused,
-        );
+        const paused = !state.video.realtime_paused;
+        if (paused && state.video.realtime_transport === 'mse') realtimePlayer.pause();
+        const changed = await runAction('set_video_realtime_paused', paused);
+        if (changed && !paused && state.video.realtime_transport === 'mse') {
+          realtimePlayer.play().catch((error) => {
+            setToast(`Could not resume video: ${error.message}`, 'error');
+          });
+        }
       } else if (videoPlayer.paused) {
         await videoPlayer.play();
       } else {
@@ -116,6 +135,7 @@ export function bindVideoControls({
         method,
         position,
         $('#video-realtime-mode').value,
+        Number($('#video-realtime-resolution').value),
       );
       if (!started) {
         videoPlayer.currentTime = position;
@@ -149,9 +169,30 @@ export function bindVideoControls({
   });
   videoPlayer.addEventListener('pause', async () => {
     const state = getState();
-    if (state?.video?.realtime_running && !state.video.realtime_paused) {
+    if (
+      state?.video?.realtime_running
+      && !state.video.realtime_paused
+      && !videoPlayer.hidden
+    ) {
       await runAction('set_video_realtime_paused', true);
     }
+  });
+  $('#video-realtime-resolution').addEventListener('change', async (event) => {
+    const state = getState();
+    const factor = Number(event.target.value);
+    const option = state?.video?.realtime_options?.find(
+      (item) => item.factor === factor,
+    );
+    if (!option?.models.length) return;
+    const model = option.models.includes($('#video-realtime-mode').value)
+      ? $('#video-realtime-mode').value
+      : option.models[0];
+    $('#video-realtime-mode').value = model;
+    await runAction('set_video_realtime_options', factor, model);
+  });
+  $('#video-realtime-mode').addEventListener('change', async (event) => {
+    const factor = Number($('#video-realtime-resolution').value);
+    await runAction('set_video_realtime_options', factor, event.target.value);
   });
   $('#video-output-resolution').addEventListener('change', (event) => {
     setSetting('factor', Number(event.target.value));
@@ -170,12 +211,12 @@ export function bindVideoControls({
   $('#video-zoom').addEventListener('input', (event) => setScale(event.target.value));
   $('#video-rewind').addEventListener('click', () => seekVideo(getCurrentVideoPosition() - 10));
   $('#video-forward').addEventListener('click', () => seekVideo(getCurrentVideoPosition() + 10));
-  $('#video-step-back').addEventListener('click', () => {
-    videoPlayer.pause();
+  $('#video-step-back').addEventListener('click', async () => {
+    await pauseForStep();
     seekVideo(getCurrentVideoPosition() - 1 / (getState()?.video?.fps || 30));
   });
-  $('#video-step-forward').addEventListener('click', () => {
-    videoPlayer.pause();
+  $('#video-step-forward').addEventListener('click', async () => {
+    await pauseForStep();
     seekVideo(getCurrentVideoPosition() + 1 / (getState()?.video?.fps || 30));
   });
   $('#video-mute').addEventListener('click', () => {

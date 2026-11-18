@@ -1,6 +1,7 @@
 import cv2
 import io
 import multiprocessing
+import os
 import re
 import shutil
 import subprocess
@@ -19,12 +20,26 @@ from core.models.weights import find_model
 from core.processing import effects as img_effects
 from core.services.app_logging import log_event
 from core.services.performance import gpu_memory_bytes, process_memory_bytes
-from core.services.realtime_video import RealTimeVideoProcessor
+from core.services.realtime_video import AMD_VIDEO_SR_MODEL, RealTimeVideoProcessor
 from core.application_modules.shared import SLIDER_DEFAULTS, VIDEO_EXTENSIONS
 
 
 class MediaModule:
     """History, media loading, export, and video processing capability."""
+
+    @staticmethod
+    def _ffmpeg_path():
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            return ffmpeg
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if not local_app_data:
+            return None
+        package_root = Path(local_app_data, "Microsoft", "WinGet", "Packages")
+        matches = sorted(
+            package_root.glob("Gyan.FFmpeg.Shared_*/ffmpeg-*/bin/ffmpeg.exe")
+        ) if package_root.is_dir() else []
+        return str(matches[-1]) if matches else None
 
     def _new_entry(
         self,
@@ -66,14 +81,19 @@ class MediaModule:
             "scale": 1.0,
         }
         if kind == "video":
-            realtime_models = self._realtime_models()
+            realtime_options = self._realtime_output_options(entry)
             output_options = self._video_output_options(entry)
             entry["settings"]["enhancement"]["factor"] = output_options[0]["factor"]
             models = self._models_for_factor(output_options[0]["factor"])
             entry["settings"]["enhancement"]["model"] = (
                 models[0] if models else "Fast CPU resize + sharpen"
             )
-            entry["realtime_model"] = realtime_models[0] if realtime_models else ""
+            entry["realtime_factor"] = (
+                realtime_options[0]["factor"] if realtime_options else None
+            )
+            entry["realtime_model"] = (
+                realtime_options[0]["models"][0] if realtime_options else ""
+            )
         thumbnail = entry["image"].copy()
         thumbnail.thumbnail((150, 100), Image.Resampling.LANCZOS)
         entry["thumbnail_image"] = thumbnail
@@ -102,8 +122,8 @@ class MediaModule:
                     )
                     selected_option = next(
                         (
-                            option for option in self._video_output_options(entry)
-                            if option["factor"] == entry["settings"]["enhancement"]["factor"]
+                            option for option in self._realtime_output_options(entry)
+                            if option["factor"] == entry["realtime_factor"]
                         ),
                         None,
                     )
@@ -147,8 +167,22 @@ class MediaModule:
                     "duration": entry["video_frame_count"] / entry["video_fps"]
                     if entry["video_fps"] > 0 else 0,
                     "realtime_url": entry["realtime_url"],
+                    "realtime_factor": entry["realtime_factor"],
                     "realtime_model": entry["realtime_model"],
-                    "realtime_models": self._realtime_models(),
+                    "realtime_options": self._realtime_output_options(entry),
+                    "realtime_transport": (
+                        "mse"
+                        if entry["realtime_model"] == AMD_VIDEO_SR_MODEL
+                        else "mjpeg"
+                    ),
+                    "realtime_stream_revision": (
+                        entry["realtime_processor"].stream_revision
+                        if entry["realtime_processor"] else 0
+                    ),
+                    "realtime_stream_offset": (
+                        entry["realtime_processor"].stream_offset
+                        if entry["realtime_processor"] else entry["video_position"]
+                    ),
                     "realtime_running": bool(
                         entry["realtime_processor"]
                         and entry["realtime_processor"].running
@@ -160,6 +194,10 @@ class MediaModule:
                     "realtime_loading": bool(
                         entry["realtime_processor"]
                         and entry["realtime_processor"].loading
+                    ),
+                    "realtime_stage": (
+                        entry["realtime_processor"].loading_stage
+                        if entry["realtime_processor"] else "Idle"
                     ),
                     "realtime_position": (
                         entry["realtime_processor"].position
@@ -450,6 +488,14 @@ class MediaModule:
             if not source_path.is_file():
                 self._set_message("error", f"Video source not found: {source_path}")
                 return False
+            if self._ffmpeg_path() is None:
+                message = (
+                    "FFmpeg is required for video upscaling. "
+                    "Install FFmpeg and add it to PATH."
+                )
+                self._set_message("error", message)
+                log_event("video_upscale_rejected", reason="ffmpeg_not_found")
+                return False
             self._job = {
                 "running": True,
                 "progress": 0,
@@ -626,35 +672,45 @@ class MediaModule:
                 raise RuntimeError("The video contains no readable frames.")
             writer.release()
             writer = None
-            ffmpeg = shutil.which("ffmpeg")
-            if ffmpeg:
-                subprocess.run(
-                    [
-                        ffmpeg,
-                        "-y",
-                        "-i",
-                        silent_output,
-                        "-i",
-                        str(source_path),
-                        "-map",
-                        "0:v:0",
-                        "-map",
-                        "1:a?",
-                        "-c:v",
-                        "copy",
-                        "-c:a",
-                        "aac",
-                        "-shortest",
-                        str(output_path),
-                    ],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    text=True,
+            ffmpeg = self._ffmpeg_path()
+            if ffmpeg is None:
+                raise RuntimeError(
+                    "FFmpeg became unavailable while finalizing the upscaled video."
                 )
-            else:
-                Path(silent_output).replace(output_path)
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-i",
+                    silent_output,
+                    "-i",
+                    str(source_path),
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a?",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "18",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-movflags",
+                    "+faststart",
+                    "-shortest",
+                    str(output_path),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
         except Exception as error:
+            log_event("video_upscale_failed", error=str(error))
             try:
                 Path(output_path).unlink(missing_ok=True)
             except OSError:
@@ -761,4 +817,3 @@ class MediaModule:
             }
             self._message = message
             self._touch()
-

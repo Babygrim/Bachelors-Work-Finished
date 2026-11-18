@@ -1,3 +1,5 @@
+import { RealtimeMsePreview } from './realtime_mse.js';
+
 const $ = (selector) => document.querySelector(selector);
 const SLIDER_SETTING_KEYS = new Set(['Brightness', 'Color', 'Contrast', 'Sharpness', 'Blur']);
 let bindAdjustControls = () => {};
@@ -54,6 +56,7 @@ let pan = { x: 0, y: 0 };
 let videoNativeSize = false;
 const panById = new Map();
 const videoPlayer = document.querySelector('#video-player');
+const realtimePlayer = document.querySelector('#realtime-player');
 let toastTimer = null;
 let settingTimer = null;
 let scaleTimer = null;
@@ -67,6 +70,12 @@ let imageLoadToken = 0;
 let resultPreviewId = null;
 let jobPollTimer = null;
 let jobPollInFlight = false;
+let shownRealtimeError = '';
+const realtimeMse = new RealtimeMsePreview(realtimePlayer, (error) => {
+  setToast(`Real-time H.264 preview failed: ${error.message}`, 'error');
+}, () => {
+  if (state?.video?.realtime_running) applyPreview(state);
+});
 
 function callApi(method, ...args) {
   const api = window.pywebview?.api;
@@ -113,6 +122,7 @@ function setToast(message, type = '') {
 async function pauseCurrentVideoForHistoryChange() {
   if (!state?.video) return true;
   videoPlayer.pause();
+  realtimeMse.setPaused(true);
   if (state.video.realtime_running) {
     return callApi('set_video_realtime_paused', true);
   }
@@ -160,8 +170,12 @@ function syncVideoTimeline() {
   const duration = Number.isFinite(videoPlayer.duration)
     ? (realtime ? state.video.duration : videoPlayer.duration)
     : state?.video?.duration || 0;
+  const realtimeTime = state?.video?.realtime_transport === 'mse'
+    && realtimePlayer.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+    ? realtimePlayer.currentTime
+    : state?.video?.realtime_position || 0;
   const current = realtime
-    ? Math.max(0, Math.min(duration, state.video.realtime_position || 0))
+    ? Math.max(0, Math.min(duration, realtimeTime))
     : Number.isFinite(videoPlayer.currentTime) ? videoPlayer.currentTime : 0;
   const formatTime = (seconds) => {
     const value = Math.max(0, Math.floor(seconds));
@@ -294,10 +308,12 @@ function applyPreview(next) {
   const realtimeVideo = $('#realtime-video');
   const video = $('#video-player');
   if (!next?.has_image) {
+    realtimeMse.stop();
     video.pause();
     video.hidden = true;
     image.hidden = true;
     realtimeVideo.hidden = true;
+    realtimePlayer.hidden = true;
     $('#realtime-loading').hidden = true;
     $('#empty-state').hidden = false;
     $('#stage-info').hidden = true;
@@ -310,9 +326,10 @@ function applyPreview(next) {
   const zoom = next.scale || 1;
   if (next.kind === 'video' && next.video?.url) {
     const realtime = Boolean(next.video.realtime_url && next.video.realtime_running);
-    $('#realtime-loading').hidden = !next.video.realtime_loading;
+    const mseRealtime = realtime && next.video.realtime_transport === 'mse';
     image.hidden = true;
-    realtimeVideo.hidden = !realtime;
+    realtimeVideo.hidden = !realtime || mseRealtime;
+    realtimePlayer.hidden = !mseRealtime;
     video.hidden = realtime;
     const changedEntry = video.dataset.entryId !== next.current_id;
     if (changedEntry) {
@@ -329,8 +346,14 @@ function applyPreview(next) {
       video.pause();
       video.currentTime = next.video.position || 0;
     }
-    const outputOption = next.video.output_options?.find(
-      (option) => option.factor === next.settings.enhancement.factor,
+    const outputOptions = realtime
+      ? next.video.realtime_options
+      : next.video.output_options;
+    const outputFactor = realtime
+      ? next.video.realtime_factor
+      : next.settings.enhancement.factor;
+    const outputOption = outputOptions?.find(
+      (option) => option.factor === outputFactor,
     );
     const videoWidth = realtime ? outputOption?.width || width : video.videoWidth || width;
     const videoHeight = realtime ? outputOption?.height || height : video.videoHeight || height;
@@ -342,8 +365,18 @@ function applyPreview(next) {
       )
       : fit;
     const videoScale = videoNativeSize ? 1 : displayFit * zoom;
-    const target = realtime ? realtimeVideo : video;
-    if (realtime && realtimeVideo.dataset.source !== next.video.realtime_url) {
+    const target = mseRealtime ? realtimePlayer : realtime ? realtimeVideo : video;
+    if (mseRealtime) {
+      realtimeMse.setSource(
+        next.video.realtime_url,
+        next.video.realtime_stream_revision || 0,
+        next.video.realtime_stream_offset || 0,
+      );
+      realtimeMse.setPaused(Boolean(next.video.realtime_paused));
+    } else {
+      realtimeMse.stop();
+    }
+    if (realtime && !mseRealtime && realtimeVideo.dataset.source !== next.video.realtime_url) {
       realtimeVideo.dataset.source = next.video.realtime_url;
       realtimeVideo.src = next.video.realtime_url;
     }
@@ -352,10 +385,42 @@ function applyPreview(next) {
     target.style.left = `calc(50% + ${pan.x}px)`;
     target.style.top = `calc(50% + ${pan.y}px)`;
     target.style.transform = 'translate(-50%, -50%)';
+    const waitingForPreview = realtime && (
+      mseRealtime
+        ? !realtimeMse.hasFirstFrame
+        : next.video.realtime_loading
+    );
+    $('#realtime-loading').hidden = !waitingForPreview;
+    if (waitingForPreview) {
+      const stage = mseRealtime && !next.video.realtime_loading
+        ? 'Waiting for decoded preview frame'
+        : next.video.realtime_stage || 'Preparing real-time preview';
+      const stageNumber = {
+        'Opening video': 1,
+        'Loading real-time model': 2,
+        'Initializing AMD AMF VideoSR': 2,
+        'Upscaling first frame': 3,
+        'Preparing first preview frame': 4,
+        'Preparing H.264 preview': 4,
+        'Waiting for decoded preview frame': 5,
+        'Seeking to frame': 1,
+        'Restarting H.264 preview': 4,
+      }[stage] || 1;
+      $('#realtime-stage').textContent = stage;
+      $('#realtime-stage-step').textContent = `Stage ${stageNumber} of 5`;
+      $('#realtime-stage-list').querySelectorAll('[data-realtime-step]').forEach((item) => {
+        const itemStep = Number(item.dataset.realtimeStep);
+        item.classList.toggle('complete', itemStep < stageNumber);
+        item.classList.toggle('active', itemStep === stageNumber);
+      });
+    }
   } else {
+    realtimeMse.stop();
     video.pause();
     video.hidden = true;
     image.hidden = false;
+    realtimeVideo.hidden = true;
+    realtimePlayer.hidden = true;
     $('#realtime-loading').hidden = true;
     if (next.image) image.src = next.image;
     image.style.width = `${Math.max(1, width * fit * zoom)}px`;
@@ -405,6 +470,8 @@ function renderHistory(next) {
       updateHistorySelection(item.id);
       await pauseCurrentVideoForHistoryChange();
       videoPlayer.pause();
+      realtimeMse.stop();
+      realtimePlayer.hidden = true;
       $('#realtime-video').hidden = true;
       $('#realtime-video').removeAttribute('src');
       $('#realtime-video').dataset.source = '';
@@ -533,30 +600,54 @@ function syncControls(next) {
     $('#video-volume').disabled = job.running;
     $('#save-video-frame-side').disabled = job.running;
     $('#crop-video-frame').disabled = job.running;
-    $('#video-realtime').disabled = job.running;
+    $('#video-realtime').disabled = job.running
+      || !next.video.realtime_options?.length;
     $('#video-realtime').classList.toggle('active', next.video.realtime_running);
     $('#video-realtime').textContent = next.video.realtime_running ? 'FX✓' : 'FX';
+    const realtimeResolution = $('#video-realtime-resolution');
+    const realtimeMode = $('#video-realtime-mode');
+    const realtimeOptions = next.video.realtime_options || [];
+    const selectedFactor = realtimeOptions.some(
+      (option) => option.factor === Number(realtimeResolution.value),
+    ) ? Number(realtimeResolution.value) : next.video.realtime_factor;
+    realtimeResolution.replaceChildren(
+      ...realtimeOptions.map((option) => new Option(option.label, option.factor)),
+    );
+    realtimeResolution.value = selectedFactor == null ? '' : String(selectedFactor);
+    const selectedOption = realtimeOptions.find(
+      (option) => option.factor === Number(realtimeResolution.value),
+    );
+    const compatibleModels = selectedOption?.models || [];
+    const selectedRealtimeModel = realtimeMode.value;
+    realtimeMode.replaceChildren(
+      ...compatibleModels.map((name) => new Option(name, name)),
+    );
+    realtimeMode.value = compatibleModels.includes(selectedRealtimeModel)
+      ? selectedRealtimeModel
+      : compatibleModels.includes(next.video.realtime_model)
+        ? next.video.realtime_model
+        : compatibleModels[0] || '';
+    realtimeResolution.disabled = job.running || next.video.realtime_running
+      || !realtimeOptions.length;
+    realtimeMode.disabled = job.running || next.video.realtime_running
+      || !compatibleModels.length;
     $('#save-video-button').disabled = (
       job.running
       || next.video.realtime_running
       || !next.models.length
       || !next.settings.enhancement.model
     );
-    const realtimeModel = $('#video-realtime-mode');
-    const selectedRealtimeModel = realtimeModel.value;
-    const realtimeModels = next.video.realtime_models || [];
-    realtimeModel.replaceChildren(
-      ...realtimeModels.map((name) => new Option(name, name)),
-    );
-    realtimeModel.value = realtimeModels.includes(selectedRealtimeModel)
-      ? selectedRealtimeModel
-      : next.video.realtime_model || realtimeModels[0] || '';
-    realtimeModel.disabled = job.running || next.video.realtime_running
-      || !realtimeModels.length;
     $('#video-fullscreen').disabled = job.running;
   }
   if (job.status === 'Complete' || job.status === 'Cancelled') {
     callApi('dismiss_job');
+  }
+  const realtimeError = next.video?.realtime_error || '';
+  if (realtimeError && realtimeError !== shownRealtimeError) {
+    shownRealtimeError = realtimeError;
+    setToast(`Real-time preview failed: ${realtimeError}`, 'error');
+  } else if (!realtimeError) {
+    shownRealtimeError = '';
   }
   if (next.message) setToast(next.message.text, next.message.type);
 }
@@ -758,7 +849,7 @@ async function initialize() {
   bindAdjustControls(setSetting, runAction);
   bindEnhanceControls(setSetting, runAction);
   bindVideoControls({
-    $, callApi, runAction, getState: () => state, videoPlayer, syncVideoTimeline,
+    $, callApi, runAction, getState: () => state, videoPlayer, realtimePlayer, syncVideoTimeline,
     applyPreview, setScale, setToast,
     pauseCurrentVideoForHistoryChange,
     setSetting,

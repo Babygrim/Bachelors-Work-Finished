@@ -54,6 +54,24 @@ supported factor suffix such as `_x2.pb`, `_x4.onnx`, or `_x8.onnx`.
 The application discovers these files automatically when the video real-time
 preview is opened.
 
+Downloaded OpenCV `dnn_superres` models:
+
+```text
+weights\realtime\ESPCN_x2.pb
+weights\realtime\ESPCN_x4.pb
+weights\realtime\FSRCNN_x2.pb
+weights\realtime\FSRCNN_x4.pb
+```
+
+Sources:
+
+- ESPCN: <https://github.com/fannymonori/TF-ESPCN/tree/master/export>
+- FSRCNN: <https://github.com/Saafke/FSRCNN_Tensorflow/tree/master/models>
+
+The realtime processor requires the `opencv-contrib-python` package with
+`cv2.dnn_superres`; the base `opencv-python` package does not provide it.
+This project declares `opencv-contrib-python` in `requirements.txt`.
+
 ## Current repository layout
 
 ```text

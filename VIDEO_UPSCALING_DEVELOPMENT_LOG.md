@@ -83,6 +83,224 @@ Play/Pause керують станом realtime-процесора: при па�
 
 Моделі розкладаються за scale factor у `weights/2x` і `weights/4x`, а realtime-моделі OpenCV залишаються у `weights/realtime`. Backend шукає ONNX-рекурсивно та передає runtime саме файл, вибраний користувачем.
 
+## 2026-11-16: дослідження ComfyUI-AMD-Video-Upscaler
+
+### Запит і правило журналювання
+
+Користувач попросив записувати в цей журнал усі спостереження та дані, про які він питає або які досліджуються під час роботи над відеоапскейлом. Надалі результати досліджень, перевірок середовища, технічні рішення та вимірювання, що стосуються цієї функціональності, слід додавати датованими записами до цього файлу.
+
+### Технологія
+
+`Yasei-no-otoko/ComfyUI-AMD-Video-Upscaler` — це ComfyUI custom node, який програмно використовує AMD Advanced Media Framework (AMF) через публічні FFmpeg-фільтри `sr_amf` і `vpp_amf`. Він не викликає приватний перемикач Radeon Software для Video Upscaling і не є окремою Python-нейромережею з власними вагами.
+
+Підтримувані алгоритми AMF включають:
+
+- `sr1-0` — Video SR 1.0, консервативний варіант;
+- `sr1-1` — Video SR 1.1, потребує перевірки сумісності драйвера;
+- `bicubic`, `bilinear`, `point` — алгоритми масштабування AMF.
+
+Сумісний node приймає RGB image tensors, але сам backend передає дані через FFmpeg subprocess. У документації проєкту зазначено обмеження: 8-bit RGB/NV12 шлях, без alpha-каналу, не zero-copy, залежність від GPU, драйвера та конкретної збірки FFmpeg.
+
+Джерела:
+
+- <https://github.com/Yasei-no-otoko/ComfyUI-AMD-Video-Upscaler>
+- <https://gpuopen.com/advanced-media-framework/>
+- <https://github.com/GPUOpen-LibrariesAndSDKs/AMF/wiki/GPU%20and%20APU%20HW%20Features%20and%20Support>
+
+### Перевірка локального середовища
+
+Під час перевірки 2026-11-16 виявлено:
+
+- GPU: `AMD Radeon RX 6700 XT`;
+- драйвер: `32.0.21043.12001`;
+- `ffmpeg.exe` не знайдений у системному `PATH`;
+- локальна програма вже має `onnxruntime-directml`, PyTorch і OpenCV;
+- realtime-апскейлер у `core/services/realtime_video.py` зараз використовує OpenCV `dnn_superres`, а не AMF;
+- повний відеоапскейл у `core/application_modules/media.py` працює через `VideoCapture`, Real-ESRGAN ONNX/DirectML або CPU та `VideoWriter`.
+
+Наявність RX 6700 XT сама по собі не підтверджує доступність `sr_amf` або `sr1-1`. Потрібна практична перевірка конкретного драйвера і FFmpeg.
+
+### Перевірка, необхідна перед інтеграцією
+
+Після встановлення FFmpeg зі збірки, скомпільованої з AMF, потрібно виконати:
+
+```powershell
+ffmpeg -hide_banner -filters | Select-String -Pattern "sr_amf|vpp_amf"
+ffmpeg -hide_banner -hwaccels | Select-String -Pattern "^amf$"
+```
+
+Очікувані результати — фільтри `sr_amf`, `vpp_amf` та hardware acceleration backend `amf`. Відсутність будь-якого з них означає, що AMD VideoSR backend не готовий до використання.
+
+### Висновок щодо інтеграції
+
+Найменш ризиковий варіант — додати AMF як окремий backend для повного відеоапскейлу, залишивши Real-ESRGAN ONNX/DirectML як альтернативу. У поточну realtime-архітектуру не слід запускати новий FFmpeg subprocess для кожного кадру: це створить значні накладні витрати. Realtime AMF потребував би довгоживучого FFmpeg pipeline або pipe.
+
+Рекомендований порядок:
+
+1. встановити та перевірити FFmpeg з AMF;
+2. додати diagnostics для FFmpeg/AMF;
+3. реалізувати окремий AMF video worker із передачею прогресу, помилок, скасуванням і очищенням неповного output;
+4. підключити його до `start_video_upscale`;
+5. порівняти на RX 6700 XT FPS, час обробки, якість і використання GPU з Real-ESRGAN;
+6. лише після вимірювань розглядати realtime AMF preview.
+
+Python-залежність для базової інтеграції не потрібна: backend можна викликати через FFmpeg subprocess.
+
+## 2026-11-16: непрограваний Real-ESRGAN результат
+
+### Спостереження
+
+Після запуску Real-ESRGAN апскейлу з параметрами `4x-REAL-General_fp16`, factor `4`, worker завершився успішно о `11:00:38`, але при виборі результату о `11:03:31` HTML video повідомив:
+
+```text
+The element has no supported sources.
+```
+
+У `app_logs/logs.txt` немає помилки worker-а або FFmpeg. Є лише повідомлення про успішне додавання відео в history, а потім помилка відтворення.
+
+### Діагностика
+
+- `ffmpeg.exe` і `ffprobe.exe` відсутні в системному `PATH`;
+- код у `core/application_modules/media.py` у такому випадку використовував OpenCV `VideoWriter` з кодеком `mp4v` і перейменовував silent MP4 у фінальний output;
+- згенерований файл мав розмір `20,038,619` байт, `29.97 FPS`, `598` кадрів і розмір `1704 × 960`;
+- OpenCV міг прочитати цей файл і перший кадр, але це не підтверджує сумісність MPEG-4 Part 2 (`mp4v`) з HTML/WebView2;
+- `mp4v` fallback не створює гарантовано відтворюваний браузерний MP4. Потрібен H.264/AAC output через FFmpeg.
+
+### Причина
+
+Root cause — небезпечний fallback при відсутньому FFmpeg. Програма трактувала OpenCV `mp4v` output як успішний відеорезультат, хоча вбудований WebView2 не зобов'язаний відтворювати цей відеокодек.
+
+### Зміна
+
+`start_video_upscale` тепер перевіряє наявність FFmpeg до запуску дорогого worker-а і відхиляє операцію з явним повідомленням, якщо FFmpeg не знайдений. Worker також більше не має silent fallback: якщо FFmpeg зникає під час фіналізації, job завершується помилкою і записується `video_upscale_failed`.
+
+Для коректного повторного тесту потрібно встановити FFmpeg зі штатними H.264/AAC encoder-ами та додати його `bin` до `PATH`. Після цього слід перевірити результат через `ffprobe` і відтворити його у вбудованому video element.
+
+## 2026-11-16: FFmpeg не видно запущеному процесу
+
+### Спостереження
+
+Після встановлення FFmpeg о `11:12:20` застосунок відхилив апскейл із `video_upscale_rejected` і причиною `ffmpeg_not_found`. Водночас новий Python-процес із оновленим `PATH` успішно знаходить FFmpeg за шляхом WinGet.
+
+### Причина
+
+FFmpeg було додано до User `PATH`, але вже запущений процес застосунку успадкував старе значення середовища. `shutil.which("ffmpeg")` у цьому процесі повертав `None`, хоча executable фізично встановлений.
+
+### Зміна
+
+У `core/application_modules/media.py` додано `_ffmpeg_path()`: спочатку використовується `PATH`, а якщо він застарілий — виконується адресний пошук WinGet-пакета `Gyan.FFmpeg.Shared` у `%LOCALAPPDATA%\Microsoft\WinGet\Packages`. Перевірка перед стартом і фіналізація worker-а використовують один і той самий resolved path.
+
+## 2026-11-16: встановлення FFmpeg з AMF
+
+### Виконана дія
+
+FFmpeg встановлено через WinGet пакет `Gyan.FFmpeg.Shared` версії `9.0.2`.
+
+Встановлений executable:
+
+```text
+C:\Users\Pogkopi\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.2-full_build-shared\bin\ffmpeg.exe
+```
+
+WinGet додав цю директорію до User `PATH`. Уже запущені процеси мають старе значення `PATH`, тому застосунок потрібно перезапустити.
+
+### Перевірка збірки
+
+FFmpeg version:
+
+```text
+9.0.2-full_build-www.gyan.dev
+```
+
+Конфігурація містить `--enable-amf`. Перевірено наявність:
+
+- `sr_amf` — AMF HQ video upscaling;
+- `vpp_amf` — AMF video scaling and format conversion;
+- `amf` — hardware acceleration backend;
+- `ffprobe` — встановлений разом із FFmpeg.
+
+### AMF smoke test
+
+Виконано однокадровий тест на `TEST_IMAGES/Wow Original_2025.05.23-12.57.mp4`:
+
+```powershell
+ffmpeg -i input.mp4 -vf "sr_amf=w=iw*2:h=ih*2:algorithm=2" -frames:v 1 -f null NUL
+```
+
+Результат: exit code `0`. Це підтверджує, що встановлений FFmpeg разом із поточним AMD-драйвером може виконати `sr_amf` на локальній RX 6700 XT.
+
+### Доступні параметри `sr_amf`
+
+Поточна збірка підтримує:
+
+- `algorithm=2` — Video SR1.0;
+- `algorithm=4` — Video SR1.1;
+- `algorithm=0` — bilinear;
+- `algorithm=1` — bicubic;
+- `algorithm=3` — point;
+- параметри `w`, `h`, `sharpness`, `keep-ratio`, `fill`.
+
+## 2026-11-16: завантаження OpenCV realtime-моделей
+
+### Обрані моделі та джерела
+
+Запит користувача згадував ESPCN і «FRCNN». Для OpenCV `dnn_superres` найбільш імовірна друга назва — **FSRCNN**. Із публічних репозиторіїв, на які посилається OpenCV, завантажені моделі для scale factor, які підтримує UI:
+
+| Файл | Джерело | Розмір |
+|---|---|---:|
+| `weights/realtime/ESPCN_x2.pb` | <https://github.com/fannymonori/TF-ESPCN/blob/master/export/ESPCN_x2.pb> | 86,446 bytes |
+| `weights/realtime/ESPCN_x4.pb` | <https://github.com/fannymonori/TF-ESPCN/blob/master/export/ESPCN_x4.pb> | 100,323 bytes |
+| `weights/realtime/FSRCNN_x2.pb` | <https://github.com/Saafke/FSRCNN_Tensorflow/blob/master/models/FSRCNN_x2.pb> | 38,973 bytes |
+| `weights/realtime/FSRCNN_x4.pb` | <https://github.com/Saafke/FSRCNN_Tensorflow/blob/master/models/FSRCNN_x4.pb> | 41,661 bytes |
+
+Джерела описують pretrained TensorFlow `.pb` моделі як сумісні з OpenCV `dnn_superres`. Усі чотири файли лежать у `weights/realtime/`, який ігнорується Git, тому великі/модельні артефакти не додаються до комітів.
+
+SHA-256:
+
+- `ESPCN_x2.pb`: `59F77351E1D7C0057BF6FE088B4A8A07E42C468C8C8AEBB674A6B4EA1823221D`
+- `ESPCN_x4.pb`: `E403F06309229CF36009CD8FB0DA032BA7643FAE9F15CF94FE562E8EDF8FEF47`
+- `FSRCNN_x2.pb`: `366B33F0084C7B3F2BF6724F0A2C77BCA94FCEC9D7B6D72389D330073B380D5C`
+- `FSRCNN_x4.pb`: `5C68D18DB561AED8EAD4FFEDF1B897EA615BAAF60EBF6C35F8E641F8FA4A21BF`
+
+### Перевірка інференсу та залежності
+
+Поточне середовище містило `opencv-python 4.9.0.80`, хоча `requirements.txt` декларує `opencv-contrib-python==4.9.0.80`. У базовій збірці `cv2.dnn_superres` відсутній. Спроба встановити contrib-пакет у робочий `.venv` не пройшла, оскільки Windows заблокував `cv2.pyd` (WinError 5), імовірно через процес, що вже використовує DLL.
+
+Для перевірки в окремий тимчасовий каталог було встановлено contrib-wheel без залежностей. У ньому всі моделі успішно завантажилися, виконали інференс на кадрі `32 × 24`, і повернули очікувані розміри:
+
+- ESPCN x2 та FSRCNN x2: `64 × 48`;
+- ESPCN x4 та FSRCNN x4: `128 × 96`.
+
+Отже, ваги валідні й сумісні з OpenCV contrib. Поточний запущений застосунок ще не може їх використати, доки його Python-середовище не буде переведене з `opencv-python` на `opencv-contrib-python`. Після закриття процесу, що блокує `cv2.pyd`, потрібно відновити залежності з `requirements.txt` і перезапустити застосунок.
+
+Під час наступної перевірки зафіксувати realtime FPS і візуальну якість ESPCN проти FSRCNN на RX 6700 XT. Наявність ваг не означає, що обробка зараз виконується на GPU: поточний OpenCV `dnn_superres` backend у програмі не налаштований на AMD GPU execution.
+
+## 2026-11-16: H.264 кодування вихідного відео
+
+### Спостереження
+
+Після успішного Real-ESRGAN апскейлу о `11:18:26` користувач повідомив про чорний кадр у history preview і помилку Windows Media Player про непідтримуване кодування. `ffprobe` для `picture-editor-324c3e59062e497691619901e56f0d6a.mp4` показав:
+
+- контейнер: MP4;
+- відео: `mpeg4` / MPEG-4 Part 2, `yuv420p`, `852 × 480`, `29.97 FPS`;
+- аудіо: AAC LC.
+
+Файл відтворювався OpenCV, але браузерний/WebView декодер і Windows Media Player можуть не підтримувати цей legacy video codec.
+
+### Причина
+
+FFmpeg фіналізував відео з `-c:v copy`, тож перепаковував потік OpenCV `mp4v` без перекодування. Встановлений FFmpeg має сумісний H.264 encoder `libx264`; `h264_amf` теж присутній, але для стабільної сумісності використовується CPU encoder `libx264`.
+
+### Зміна
+
+Фіналізація тепер перекодовує відео в H.264 (`libx264`, `yuv420p`, CRF 18, preset `veryfast`), залишає AAC аудіо та додає `+faststart` для швидшого початку відтворення MP4. Оригінальне відео в history не змінюється; це впливає лише на нові результати апскейлу.
+
+### Перевірка
+
+Існуючий 2x output було тестово перекодовано тією самою FFmpeg-командою. `ffprobe` підтвердив `codec_name=h264`, H.264 High profile, `pix_fmt=yuv420p`, 852 × 480, 29.97 FPS та AAC LC аудіо. OpenCV успішно декодував перший кадр розміром 852 × 480. Тимчасовий тестовий output після перевірки видалено.
+
+Новий end-to-end апскейл потрібно повторити після перезапуску застосунку, а результат перевірити у history preview і Windows Media Player. Уже створений раніше output залишається MPEG-4 Part 2 і автоматично не змінюється.
+
 ## 2026-11-13: помилка після скасування обробки
 
 Після скасування job frontend продовжував опитувати стан, у якому для завершеного відеоапскейлу міг бути відсутній `stage`. Виклик `job.stage.replaceAll(...)` кожні 150 мс створював повторювані помилки `Cannot read properties of undefined (reading 'replaceAll')`.
@@ -134,3 +352,151 @@ HTML-відео відтворювало власний `currentTime` зі шв�
 Кнопка Play/Pause раніше перевіряла стан прихованого HTML video element. Під час realtime він залишається paused, тому повторне натискання не могло відновити або призупинити realtime-процесор.
 
 Тепер під час realtime кнопка використовує `realtime_paused`, а для звичайного відео зберігає керування HTML video element.
+
+## 2026-11-16: дослідження GPU для realtime-апскейлу
+
+### Поточний шлях
+
+`RealTimeVideoProcessor` відкриває відео через OpenCV `VideoCapture`, а `_RealtimeUpscaler` запускає OpenCV `dnn_superres` для кожного кадру. На цей момент у diagnostics жорстко вказано CPU. Застосунок уже має ONNX Runtime з `DmlExecutionProvider`, який використовується Real-ESRGAN у повному відеоапскейлі.
+
+### Перевірені GPU backend-и
+
+- OpenCV бачить OpenCL-пристрій AMD `gfx1031` (Advanced Micro Devices) і має OpenCL увімкненим.
+- ESPCN `.pb` модель успішно повернула x2 кадр при `DNN_TARGET_OPENCL`, але під час інференсу OpenCV вивів `CL_INVALID_COMPILER_OPTIONS` для `ocl4dnn` kernel (`-cl-no-subgroup-ifp -D AMD_DEVICE`). Тому форма результату не доводить GPU execution: OpenCV може непомітно перейти на CPU.
+- ONNX Runtime у поточному середовищі оголошує `DmlExecutionProvider` і `CPUExecutionProvider`.
+- FFmpeg `sr_amf` вже проходив апаратний smoke test на RX 6700 XT, але AMF VideoSR є іншим алгоритмом, а не прискореним виконанням ESPCN/FSRCNN.
+
+### Необхідне рішення перед реалізацією
+
+Потрібно вибрати між збереженням ESPCN/FSRCNN через конвертацію/підключення ONNX Runtime DirectML та окремим AMF VideoSR backend-ом, який має підтверджене апаратне виконання, але змінює алгоритм і результат. До вибору не змінювати realtime behavior; вимірювання FPS без підтвердженого GPU execution не вважати GPU benchmark.
+
+### AMF realtime pipe: перші невдалі спроби
+
+Після вибору AMF протестовано передавання кадрів через FFmpeg:
+
+- вхідні `bgr24` та `yuv420p` raw frames через stdin завершуються помилкою AMF filter `Error number -129`;
+- декодований file input через `sr_amf` успішно видає один кадр у sink `null`, але filter output має піксельний формат `amf`;
+- спроба конвертувати цей результат у `bgr24` або MJPEG для наявного preview завершується тим самим `-129`;
+- тестовий `h264_amf` output pipeline не завершився за 90 секунд і був зупинений.
+
+Отже, попередній smoke test із null sink доводить лише запуск фільтра, але не отримання кадрів для UI. Поточний realtime preview передає JPEG кадри через локальний MJPEG endpoint, тому AMF surfaces треба або коректно завантажувати з GPU в CPU, або змінити транспорт/рендерер на hardware video stream. До розв'язання цього interop питання AMF не можна вважати готовим realtime backend-ом.
+
+## 2026-11-16: інтеграція AMF у realtime preview
+
+### Розв'язання interop
+
+Підтверджено робочий long-lived FFmpeg raw-frame pipe для поточного MJPEG preview. Потрібний filtergraph:
+
+```text
+format=nv12,hwupload,sr_amf=<width>:<height>:algorithm=sr1-0:format=nv12:keep-ratio=false:fill=false,hwdownload,format=nv12,format=rgb24
+```
+
+FFmpeg запускається з `-init_hw_device amf=amf -filter_hw_device amf`. Кадри подаються через stdin як `rgb24`, а результат читається зі stdout як `rgb24`. Pipe обробляє часткові читання/записи; AMF має затримку на один кадр, тож worker зберігає індекси очікуваних кадрів і дочитує останній результат після EOF.
+
+### Інтеграція та перевірки
+
+- Додано окремий режим `AMD VideoSR (AMF)` у realtime model discovery; у поточному середовищі доступні перевірені масштаби x2 та x4.
+- `VideoModule.start_video_realtime` передає resolved FFmpeg шлях у `RealTimeVideoProcessor`.
+- AMF апскейл відбувається на GPU; `hwdownload`, RGB/JPEG кодування та передавання через наявний MJPEG preview лишаються CPU-операціями.
+- На `TEST_IMAGES/Wow Original_2025.05.23-12.57.mp4` перевірено x2 вихід 1280×720: 60 послідовних кадрів оброблено за 2.94 с (20.42 FPS), без додаткового декодування JPEG у тестовому клієнті.
+- Перевірено pause/resume, seek до 1.0 с, stop без помилки, x4 вихід 2560×1440 та flush восьми кадрів наприкінці файлу.
+- Перший замір показав лише 9.5 FPS. Причина — `Event.wait(0.05)` блокував цикл навіть коли pause-прапорець був вимкнений; AMF worker тепер чекає лише під час реальної паузи. Повторний замір після виправлення дав 20.42 FPS.
+
+AMF VideoSR є окремим алгоритмом і змінює результат порівняно з ESPCN/FSRCNN. Readback на CPU означає, що pipe не zero-copy; x4 перевірений на коректність кадрів/EOF, але стабільний x4 FPS окремо не вимірювався. Масштаб x8 не перевірявся.
+
+### Вибір фактора realtime AMF
+
+Фактор задається через список `Output resolution`: backend формує доступні розміри як вихідна ширина/висота, помножені на factor. У поточному середовищі доступні x2 і x4; при відкритті відео за замовчуванням обирається перший доступний варіант — x2. Наприклад, для джерела 640×360 це 1280×720 або 2560×1440.
+
+Зміна списку передається як setting `factor` і використовується для цільового розміру AMF кадру. Поки realtime запущений, список вимкнений; щоб змінити фактор, потрібно зупинити realtime, обрати іншу роздільність і запустити його знову.
+
+## 2026-11-16: низьке GPU та високе CPU навантаження у realtime AMF
+
+### Вимірювання
+
+Під час активної обробки знято Windows `GPU Engine(*)\Utilization Percentage` і зіставлено engine counters з PID саме AMF-процесу FFmpeg:
+
+- x2, вихід 1280×720: 6 послідовних семплів показали приблизно 4.1–4.3% на GPU `3D` engine; `compute` та video-codec engines — 0%. За цей період Python-процес використав близько 2.8 CPU-секунди, FFmpeg — близько 0.2 CPU-секунди.
+- x4, вихід 2560×1440: середня GPU `3D` активність FFmpeg — 1.41% (максимум 1.53%), `compute` та video-codec engines — 0%. Python використав близько 5.8 CPU-секунди за приблизно 6 секунд, FFmpeg — близько 0.1 CPU-секунди.
+- Профіль x4: 20 кадрів за 8.39 с (2.38 FPS); середній час JPEG encode — 49.3 мс/кадр, `send_frame` — 3.8 мс, `capture.read` — 0.7 мс, `cvtColor` — 1.1 мс. `read_frame` займав 361.6 мс wall time переважно через очікування pipe/GPU output.
+
+### Висновок
+
+AMF-фільтр працює через FFmpeg hardware device і FFmpeg PID має ненульову GPU `3D` активність, але це лише мала частина повного шляху. OpenCV декодує відео на CPU; Python конвертує кадри, передає raw bytes і JPEG-кодує збільшене зображення; FFmpeg виконує форматні перетворення та `hwdownload`. На x4 великі CPU-visible кадри й JPEG preview обмежують швидкість та тримають CPU зайнятим, тоді як GPU більшу частину часу очікує.
+
+Поточний MJPEG preview не є GPU-resident/zero-copy шляхом. Просте підвищення factor не усуває цю архітектурну межу. Щоб істотно зменшити CPU та краще використати GPU, потрібно прототипувати інший preview transport/renderer, який не повертає кожен upscaled кадр у Python для JPEG-кодування. Попередній `h264_amf` smoke test зависав, тому перед зміною UI/transport потрібен окремий обмежений прототип.
+
+## 2026-11-16: прототип AMF H.264 realtime transport
+
+### Перевірені варіанти
+
+- Контрольний `h264_amf` encode без `sr_amf` завершився за 0.25 с; ffprobe знайшов H.264 1280×720 з 12 кадрами, три кадри успішно декодувалися.
+- Зв'язка `sr_amf → h264_amf` в одному FFmpeg процесі не завершилася за 40 с ані з прямими AMF frames, ані після явного `hwdownload`/NV12. Окремий raw-input live тест не видав fragment і був зупинений після таймауту; його завислий FFmpeg PID зупинено.
+- Працює двопроцесний прототип: перший FFmpeg виконує AMF VideoSR і читає кадр назад у Python; другий приймає BGR raw frames через stdin, виконує `format=nv12,hwupload`, кодує `h264_amf` і віддає fragmented MP4 через stdout.
+
+### Результат двопроцесного прототипу
+
+На x2 тесті отримано 60 SR-кадрів і 60 MP4 fragments до закриття encoder input; вихідний потік — 2,749,172 bytes. ffprobe підтвердив H.264 1280×720 і 60 кадрів, FFmpeg успішно декодував три кадри. Увесь тестовий потік сформовано за 2.75 с.
+
+### Обмеження й рішення
+
+Це лише CLI-прототип, ще не підключений до `VideoStreamServer` чи WebView. Двопроцесний варіант усе ще передає повнорозмірні кадри через RAM і повторно завантажує їх для AMF encoder-а; вимірювання зменшення CPU та браузерного відтворення поки немає. Прямий zero-copy варіант із одним FFmpeg процесом не підтверджений через зависання, тому перед інтеграцією потрібно окремо вирішити, чи прийнятний прототипований обхід із двома процесами та CPU-переходом.
+
+## 2026-11-16: H.264/MSE preview для realtime AMF
+
+### Транспорт та інтеграція
+
+Звичайний `<video src>` не відтворює fragmented MP4, який надходить частинами по HTTP (`DEMUXER_ERROR_COULD_NOT_OPEN`); той самий завершений файл відтворюється. Chromium підтримує потрібний формат через Media Source Extensions (MSE), тому додано окремий MSE preview для AMD AMF. Інші realtime-моделі залишилися на MJPEG.
+
+AMF VideoSR і H.264 encoder працюють у двох FFmpeg процесах: спроби з'єднати їх в один процес зависали, а розділений потік проходить перевірки. Між процесами передається NV12: це прибирає зайві RGB-конвертації та JPEG-кодування кожного кадру в Python для preview, але не усуває CPU readback з AMF-процесу. H.264 використовує Main profile, level 5.0 (`avc1.4D0032`); ffprobe підтвердив level 50, Chromium підтримує цей MIME type для перевірених x2/x4 розмірів.
+
+Додано chunked `/realtime/{token}/mp4` endpoint і MSE-контролер у UI. Черга H.264 обмежена 64 фрагментами по 64 KiB, а черга raw AMF кадрів — чотирма кадрами. Seek/reconnect створює нову stream revision; timestamp offset переносить буфер у потрібну позицію. JPEG для `latest_frame` кодується лише за запитом, зокрема коли користувач зберігає кадр.
+
+### Перевірки та вимірювання
+
+- Chromium відтворив x2 H.264 MSE потік у 1280×720 та x4 у 2560×1440 без decoder error.
+- Фінальний x2 seek перевірено на активному потоці: відтворення з offsets 5 с і 8 с дало відповідно 5.62 с і 8.61 с, `readyState=4`, розмір 1280×720. Переривання попередніх HTTP fetch-запитів під час seek було очікуваним.
+- Windows повідомляв `ConnectionAbortedError` при скасуванні старого MP4 fetch під час seek. MP4 handler тепер обробляє цей розрив як звичайне закриття клієнта; повторний тест обох seek пройшов без traceback, processor завершився з `error=null`.
+- Після переходу AMF→NV12 `latest_frame` за запитом сформував коректний JPEG 1280×720.
+- x2 під час п'ятисекундного семплу: Python використав 0.14 CPU-секунди, AMF FFmpeg — 0.19, H.264 FFmpeg — 0.09. Середня GPU активність AMF process: 8.92% 3D; H.264 encoder: 8.77% video-codec та 3.15% 3D. У короткому diagnostics семплі було близько 15.18 FPS.
+- x4 під час п'ятисекундного семплу: Python використав 4.06 CPU-секунди, AMF FFmpeg — 0.03, H.264 FFmpeg — 0.06. Середня GPU активність AMF process: 6.35% 3D; H.264 encoder: 4.70% video-codec та 1.66% 3D. Короткий семпл показав близько 4.8 FPS, повний diagnostics — близько 7.3 FPS.
+
+### Висновок та обмеження
+
+H.264/MSE прибрав JPEG encode на кожен кадр та зменшив CPU-витрати, водночас підтверджено ненульову активність AMF і video-codec GPU engines. Це не zero-copy: декодування OpenCV, передавання raw кадрів та readback залишають CPU роботу; x4 усе ще займає близько 81% одного CPU ядра за виміряний інтервал і працює приблизно на 4.8–7.3 FPS. Це краще за попередній x4 MJPEG замір 2.38 FPS та 5.8 CPU-секунди за 6 секунд, але не означає, що навантаження повністю перенесено на GPU.
+
+Перевірено реальний stream endpoint у Chromium; повний PyWebView UI end-to-end та стабільний pause/resume у видимому вікні окремо не підтверджено. Під час попередньої перевірки браузер призупиняв фонове відео, тому цей результат не можна вважати перевіркою pause/resume контролів програми.
+
+## 2026-11-16: виправлення realtime FPS meter
+
+FPS diagnostics раніше були накопичувальним середнім `processed_frames / elapsed_since_start`, через що значення відставало від поточної швидкості кадрів. Тепер для кожного опублікованого кадру вимірюється його час обробки монотонним годинником, а FPS оновлюється як `1 / frame_processing_seconds`. Для CPU-моделей інтервал охоплює читання кадру, кеш або upscale/JPEG encode та публікацію; для AMF час початку зберігається разом із frame index, щоб врахувати однокадрову затримку пайплайна, а вимір завершується після передачі кадру H.264 encoder-у. Очікування між кадрами не враховується.
+
+Перевірка формули: 100 мс дали 10 FPS, 25 мс — 40 FPS. На шести перших x2 AMF кадрах отримано діагностичні значення 5.35, 10.64, 12.66, 12.82, 32.26 і 21.28 FPS без processor error. Це короткий startup семпл, не benchmark; миттєвий FPS може коливатися між кадрами, особливо під час запуску пайплайна.
+
+Додано окреме поле `average_fps`: кількість опублікованих кадрів, поділена на час від запуску realtime-процесора. Diagnostics UI показує `Processing FPS` та накопичувальний `Average FPS` окремими рядками.
+
+## 2026-11-18: згладжування realtime FPS
+
+Миттєве `1 / frame_time` могло сильно змінюватися від кадру до кадру. Застосовано експоненційне згладжування часу кадру з [підходу зі Stack Overflow](https://stackoverflow.com/questions/87304/calculating-frames-per-second-in-a-game): `smoothed_time = 0.9 * previous_smoothed_time + 0.1 * current_frame_time`; відображуваний `Processing FPS` тепер дорівнює `1 / smoothed_time`. Перший кадр задає початкове значення без штучного розгону від нуля. Окремий `Average FPS` лишився загальним середнім від старту, без зміни семантики.
+
+## 2026-11-18: видалення Average FPS
+
+На прохання користувача прибрано рядок `Average FPS` із diagnostics UI та пов'язані невикористані backend-лічильники. Згладжений `Processing FPS` лишився єдиним показником швидкості realtime-обробки.
+
+## 2026-11-18: окремий вибір realtime-роздільності та алгоритму
+
+Realtime налаштування винесено в окрему секцію відеопанелі: користувач спершу обирає вихідну роздільність, потім бачить лише сумісні з нею алгоритми. Доступність factor/model pair визначається реальними realtime-вагами та AMD AMF; backend перевіряє пару при збереженні й запуску.
+
+Realtime factor зберігається окремо від `settings.enhancement.factor`, тому вибір preview не змінює роздільність подальшого video export. У toolbar залишено лише кнопку FX; модель і роздільність вимикаються на час роботи realtime processor.
+
+## 2026-11-18: групування відеоінструментів
+
+У video inspector секції переставлено за робочим порядком: Frame Actions, Upscale Settings, Real-Time Preview. Між групами додано вертикальний відступ і роздільник для чіткішого візуального поділу.
+
+## 2026-11-18: етапи підготовки AMF preview та очікування першого кадру
+
+AMF backend позначав перший кадр готовим одразу після запису в H.264 encoder. Цей стан передавався в UI як `realtime_loading=false`, хоча browser MSE ще не встиг додати й декодувати відеокадр; тому overlay зникав раніше, ніж з'являлося зображення.
+
+Diagnostics state тепер передає поточний етап: відкриття відео, ініціалізація AMF, апскейл першого кадру, підготовка H.264 та очікування декодованого кадру. Підготовчий panel залишається поверх чорного preview до `loadeddata` від MSE; після першого кадру він зникає. На seek/reconnect перший кадр очікується повторно.
+
+Перевірка на live AMF x2 потоці у Chromium: backend перейшов у `Waiting for decoded preview frame`, потім реальний MSE controller отримав `loadeddata`; video мав 1280×720, `readyState=4`, відобразив 25 кадрів, sample pixel був ненульовим, media error відсутній. Так підтверджено, що backend loading завершався до готовності кадру в браузері та що перший кадр далі коректно декодується.

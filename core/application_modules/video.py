@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 from core.services.app_logging import log_event
-from core.services.realtime_video import RealTimeVideoProcessor
+from core.services.realtime_video import AMD_VIDEO_SR_MODEL, RealTimeVideoProcessor
 
 
 class VideoModule:
@@ -39,7 +39,43 @@ class VideoModule:
             log_event("realtime_seek_requested", position=entry["video_position"])
         return True
 
-    def start_video_realtime(self, position=None, mode=""):
+    def set_video_realtime_options(self, factor, mode):
+        with self._lock:
+            entry = self._current()
+            if (
+                not entry
+                or entry["kind"] != "video"
+                or self._job["running"]
+                or (
+                    entry["realtime_processor"]
+                    and entry["realtime_processor"].running
+                )
+            ):
+                return False
+            try:
+                factor = int(factor)
+            except (TypeError, ValueError):
+                return False
+            option = next(
+                (
+                    option for option in self._realtime_output_options(entry)
+                    if option["factor"] == factor
+                ),
+                None,
+            )
+            if not option or mode not in option["models"]:
+                self._set_message(
+                    "error",
+                    "Select a real-time model supported by the output resolution.",
+                )
+                return False
+            entry["realtime_factor"] = factor
+            entry["realtime_model"] = mode
+            self._touch()
+        log_event("realtime_options_changed", model=mode, factor=factor)
+        return True
+
+    def start_video_realtime(self, position=None, mode="", factor=None):
         with self._lock:
             entry = self._current()
             if (
@@ -48,23 +84,39 @@ class VideoModule:
                 or self._job["running"]
             ):
                 return False
-            if mode not in self._realtime_models():
-                self._set_message("error", "Select an available real-time model.")
+            try:
+                factor = int(
+                    entry["realtime_factor"] if factor is None else factor
+                )
+            except (TypeError, ValueError):
+                factor = None
+            output_option = next(
+                (
+                    option for option in self._realtime_output_options(entry)
+                    if option["factor"] == factor
+                ),
+                None,
+            )
+            if not output_option or mode not in output_option["models"]:
+                self._set_message(
+                    "error",
+                    "Select a real-time model supported by the output resolution.",
+                )
                 return False
             if entry["realtime_processor"] and entry["realtime_processor"].running:
                 return True
-            output_option = next(
-                option for option in self._video_output_options(entry)
-                if option["factor"] == entry["settings"]["enhancement"]["factor"]
-            )
             processor = RealTimeVideoProcessor(
                 entry["video_path"],
                 mode,
-                entry["settings"]["enhancement"]["factor"],
+                factor,
                 output_size=(output_option["width"], output_option["height"]),
+                ffmpeg_path=(
+                    self._ffmpeg_path() if mode == AMD_VIDEO_SR_MODEL else None
+                ),
             )
             entry["realtime_processor"] = processor
             entry["realtime_url"] = self._video_stream.register_realtime(processor)
+            entry["realtime_factor"] = factor
             entry["realtime_model"] = mode
             start_position = (
                 entry["video_position"] if position is None else float(position)
@@ -82,7 +134,7 @@ class VideoModule:
         log_event(
             "realtime_started",
             model=mode,
-            factor=entry["settings"]["enhancement"]["factor"],
+            factor=factor,
             position=start_position,
         )
         return True

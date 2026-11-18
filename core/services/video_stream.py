@@ -3,7 +3,7 @@ import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 class VideoStreamServer:
@@ -133,11 +133,22 @@ class VideoStreamServer:
             processor.stop()
 
     def _serve_realtime(self, handler, send_body):
-        token = unquote(urlparse(handler.path).path.removeprefix("/realtime/")).strip("/")
+        parsed = urlparse(handler.path)
+        parts = unquote(parsed.path).strip("/").split("/")
+        if len(parts) not in (2, 3) or parts[0] != "realtime":
+            handler.send_error(404)
+            return
+        token = parts[1]
         with self._lock:
             processor = self._realtime.get(token)
         if not processor:
             handler.send_error(404)
+            return
+        if len(parts) == 3:
+            if parts[2] != "mp4":
+                handler.send_error(404)
+                return
+            self._serve_realtime_mp4(handler, send_body, processor, parsed.query)
             return
         if not send_body:
             handler.send_response(200)
@@ -171,6 +182,51 @@ class VideoStreamServer:
                 handler.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             return
+
+    @staticmethod
+    def _serve_realtime_mp4(handler, send_body, processor, query):
+        try:
+            revision = int(parse_qs(query).get("revision", ["0"])[0])
+        except ValueError:
+            handler.send_error(400, "Invalid stream revision")
+            return
+        handler.send_response(200)
+        handler.send_header("Content-Type", "video/mp4")
+        handler.send_header("Access-Control-Allow-Origin", "*")
+        handler.send_header("Cache-Control", "no-cache, no-store")
+        if send_body:
+            handler.send_header("Transfer-Encoding", "chunked")
+            handler.send_header("Connection", "close")
+        handler.end_headers()
+        if not send_body:
+            return
+
+        stream = None
+        try:
+            while processor.running or stream:
+                if processor.stream_revision != revision:
+                    break
+                if stream is None:
+                    stream = processor.wait_for_h264_stream(revision)
+                    if stream is None:
+                        if processor.error or not processor.running:
+                            break
+                        continue
+                chunk, finished = stream.read_chunk()
+                if chunk:
+                    handler.wfile.write(
+                        f"{len(chunk):X}\r\n".encode("ascii") + chunk + b"\r\n"
+                    )
+                    handler.wfile.flush()
+                if finished:
+                    break
+            handler.wfile.write(b"0\r\n\r\n")
+            handler.wfile.flush()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            if processor.stream_revision == revision:
+                processor.restart_h264_stream()
+        except RuntimeError as error:
+            processor.fail_h264_stream(error)
 
     @staticmethod
     def _send_range_error(handler, size):
