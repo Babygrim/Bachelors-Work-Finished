@@ -4,9 +4,16 @@ import re
 from pathlib import Path
 
 from core.config.constants import ROOT_DIR
-from core.processing.output_size import TARGET_HEIGHTS, is_target, output_plan, target_label
+from core.processing.output_size import (
+    TARGET_HEIGHTS,
+    is_target,
+    output_plan,
+    resolution_label,
+    target_label,
+)
 from core.models.weights import models_for_factor
 from core.services.upscalers.constants import AMD_VIDEO_SR_MODEL
+from core.services.upscalers.gpu_realtime import gpu_realtime_models
 
 
 class ModelManager:
@@ -49,8 +56,13 @@ class ModelManager:
         return sorted(models)
 
     @classmethod
-    def realtime_models_for_factor(cls, factor):
-        """Get realtime models available for a specific factor."""
+    def realtime_models_for_factor(cls, factor, source_size=None):
+        """Get realtime models available for a specific factor.
+
+        Real-ESRGAN GPU models depend on the source size (they only keep up with low-resolution
+        video), so they are included only when `source_size` is given. They are listed last so
+        the faster AMD VideoSR stays the default choice.
+        """
         factor = int(factor)
         models = []
         for model in cls.realtime_models():
@@ -61,7 +73,32 @@ class ModelManager:
             match = re.search(r"_x(2|4|8)$", model, re.IGNORECASE)
             if match and int(match.group(1)) == factor:
                 models.append(model)
+        if source_size is not None:
+            models.extend(gpu_realtime_models(factor, source_size))
         return models
+
+    @staticmethod
+    def _finalize_options(options):
+        """Drop 'N×' options duplicating a 1080p/2160p option, name standard heights, sort by size.
+
+        Real-time models that only existed for a dropped option are moved to the target option.
+        """
+        targets = {
+            (option["width"], option["height"]): option
+            for option in options if is_target(option["factor"])
+        }
+        merged = []
+        for option in options:
+            target = targets.get((option["width"], option["height"]))
+            if target is None or is_target(option["factor"]):
+                merged.append(option)
+                continue
+            for model in option.get("models", []):
+                if model not in target["models"]:
+                    target["models"].append(model)
+        for option in merged:
+            option["label"] = resolution_label(option["width"], option["height"])
+        return sorted(merged, key=lambda option: (option["height"], option["width"]))
 
     @classmethod
     def realtime_output_options(cls, entry):
@@ -71,7 +108,7 @@ class ModelManager:
         for factor in (2, 4, 8, 1080):
             if is_target(factor) and source_size[1] >= factor:
                 continue
-            models = cls.realtime_models_for_factor(factor)
+            models = cls.realtime_models_for_factor(factor, source_size)
             if not models:
                 continue
             width, height = output_plan(source_size, factor)[1]
@@ -85,7 +122,7 @@ class ModelManager:
                 ),
                 "models": models,
             })
-        return options
+        return cls._finalize_options(options)
 
     @classmethod
     def video_models_for_factor(cls, factor, entry=None):
@@ -130,4 +167,4 @@ class ModelManager:
                     "height": size[1],
                     "label": target_label(target, size),
                 })
-        return options
+        return cls._finalize_options(options)

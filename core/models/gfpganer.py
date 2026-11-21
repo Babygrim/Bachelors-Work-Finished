@@ -11,8 +11,6 @@ from torchvision.transforms.functional import normalize
 from gfpgan.archs.gfpgan_bilinear_arch import GFPGANBilinear
 from gfpgan.archs.gfpganv1_arch import GFPGANv1
 from gfpgan.archs.gfpganv1_clean_arch import GFPGANv1Clean
-from core.processing.tiling import tile_image_with_overlap, stitch_tiles_with_blending
-from core.progress import report_progress
 
 class GFPGANer():
     """Helper for restoration with GFPGAN.
@@ -136,28 +134,10 @@ class GFPGANer():
         if not has_aligned and paste_back:
             # upsample the background
             if self.bg_upsampler is not None:
-                # Now only support RealESRGAN for upsampling background
-                # bg_image = self.bg_upsampler.enhance(img, outscale=self.upscale)[0]
-                
-                # MY ADDITION - tiling up cuz of uknown (for me) issues with image being cropped in output (AMD RX 6700 XT)
-                tile_size = 64
-                tile_stride = 32
-                tiles, positions, valid_sizes, original_size = tile_image_with_overlap(Image.fromarray(img), tile_size, tile_stride)
-    
-                upscaled_tiles = []
-                total_tiles = len(tiles)
-                for i, tile in enumerate(tiles):
-                    upscaled_tile = self.bg_upsampler.enhance(np.array(tile), outscale=self.upscale)
-                    upscaled_tiles.append(Image.fromarray(upscaled_tile))
-                    report_progress(progress_queue, "face-background-upscale", i + 1, total_tiles)
-
-                bg_img = np.array(stitch_tiles_with_blending(upscaled_tiles, 
-                                                        positions, 
-                                                        valid_sizes, 
-                                                        original_size, 
-                                                        tile_size,
-                                                        tile_stride, 
-                                                        self.upscale))
+                # The upsampler tiles large images itself (fixed-shape tiles with overlap), so the
+                # whole image is passed at once. An earlier workaround split it into 64 px tiles with
+                # a 32 px stride, i.e. thousands of calls (each padded to a full tile) per image.
+                bg_img = self.bg_upsampler.enhance(img, progress_queue=progress_queue, outscale=self.upscale)
             else:
                 bg_img = None
 

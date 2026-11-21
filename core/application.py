@@ -9,6 +9,7 @@ from core.application_modules.shared import SLIDER_DEFAULTS
 from core.application_modules.video import VideoModule
 from core.application_modules.operations import OperationsModule
 from core.managers import ModelManager, EffectsManager
+from core.models.model_info import warm_model_info
 
 _native_window = None
 
@@ -46,6 +47,7 @@ class WebApp(MediaModule, VideoModule, OperationsModule, ModelManager, EffectsMa
         self._cancel_event = None
         self._process = None
         OperationsModule.__init__(self)
+        threading.Thread(target=warm_model_info, daemon=True).start()
 
     def _bind_window(self, window):
         global _native_window
@@ -79,8 +81,8 @@ class WebApp(MediaModule, VideoModule, OperationsModule, ModelManager, EffectsMa
     def _realtime_models(self):
         return self.realtime_models()
 
-    def _realtime_models_for_factor(self, factor):
-        return self.realtime_models_for_factor(factor)
+    def _realtime_models_for_factor(self, factor, source_size=None):
+        return self.realtime_models_for_factor(factor, source_size)
 
     def _realtime_output_options(self, entry):
         return self.realtime_output_options(entry)
@@ -140,16 +142,16 @@ class WebApp(MediaModule, VideoModule, OperationsModule, ModelManager, EffectsMa
                     return
                 entry_id = entry["id"]
                 revision = self._preview_revision
-                image = entry["image"].copy()
-                settings = {
-                    "effects": dict(entry["settings"]["effects"]),
-                    "enhancement": dict(entry["settings"]["enhancement"]),
-                }
+                image = entry["image"]
+                proxy = entry.get("preview_proxy")
+                effects = dict(entry["settings"]["effects"])
 
             try:
-                image = self._apply_effects(image, settings)
-                image.thumbnail((1800, 1400), Image.Resampling.LANCZOS)
-                preview_url = self._image_url(image)
+                if proxy is None or proxy["source"] is not image:
+                    proxy = self.build_preview_proxy(image)
+                    with self._lock:
+                        entry["preview_proxy"] = proxy
+                preview_url = self.render_effect_preview(proxy, effects)
             except Exception as error:
                 with self._lock:
                     if revision == self._preview_revision and entry_id == self._current_id:

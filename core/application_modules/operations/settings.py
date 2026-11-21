@@ -12,9 +12,9 @@ class SettingsOperations:
         """Set a configuration setting with validation."""
         return self._settings_manager.set_setting(key, value)
 
-    def reset_module(self):
-        """Reset settings to defaults."""
-        return self._settings_manager.reset_module()
+    def reset_module(self, scope=None):
+        """Reset settings to defaults (optionally only the 'adjust' or 'upscale' tab)."""
+        return self._settings_manager.reset_module(scope)
 
     def set_scale(self, scale):
         """Set the scale factor for processing."""

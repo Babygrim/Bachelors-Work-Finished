@@ -76,6 +76,10 @@
             <span class="loading-spinner" aria-hidden="true"></span>
             <span>Loading media</span>
           </div>
+          <div class="image-loading" id="effect-loading" hidden aria-live="polite">
+            <span class="loading-spinner" aria-hidden="true"></span>
+            <span>Applying effects</span>
+          </div>
           <div class="image-loading" id="realtime-loading" hidden aria-live="polite">
             <div class="realtime-preparation">
               <span class="loading-spinner" aria-hidden="true"></span>
@@ -113,7 +117,7 @@
             <input id="video-zoom" type="range" min="10" max="500" value="100" aria-label="Video zoom" disabled>
           </label>
           <div class="video-audio-control">
-            <button class="icon-button video-mute" id="video-mute" title="Mute" aria-label="Mute" disabled>🔊</button>
+            <button class="icon-button video-mute" id="video-mute" title="Mute" aria-label="Mute" disabled></button>
             <label class="video-volume" title="Volume">
               <input id="video-volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Video volume" disabled>
             </label>
@@ -124,7 +128,8 @@
 
       <aside class="inspector" id="inspector">
         <div class="inspector-head"><div><div class="eyebrow" id="inspector-kicker">IMAGE TOOLS</div><h2 id="inspector-title">Image</h2></div><button class="text-button reset-button" id="reset-module" disabled>Reset</button></div>
-        <div class="controls" id="effects-controls">
+        <div class="inspector-tabs" id="inspector-tabs" role="tablist" aria-label="Tool groups" hidden></div>
+        <div class="controls" id="effects-controls" data-tab="adjust">
           <div class="control-group">
             <div class="control-label"><label for="brightness">Brightness</label><output data-output="Brightness">1.00</output></div>
             <input class="effect-slider" id="brightness" data-setting="Brightness" type="range" min="0" max="500" value="100">
@@ -146,11 +151,11 @@
             <input class="effect-slider" id="blur" data-setting="Blur" type="range" min="0" max="1000" value="0">
           </div>
           <div class="setting-row"><div><strong>Invert colors</strong><small>Reverse image color values</small></div><label class="switch"><input id="inversion" data-setting="Inversion" type="checkbox"><span></span></label></div>
+          <button class="button button-primary full-button" id="denoise-button">Denoise image <span class="button-icon">✳</span></button>
           <div class="control-divider"></div>
-          <button class="button button-secondary full-button" id="denoise-button">Denoise image <span class="button-icon">✳</span></button>
         </div>
 
-        <div class="controls" id="enhance-controls" hidden>
+        <div class="controls" id="enhance-controls" data-tab="upscale" hidden>
           <div class="section-label">UPSCALE FACTOR</div>
           <div class="segmented" id="factor-options">
             <button data-factor="2">2×</button><button data-factor="4">4×</button><button data-factor="8">8×</button>
@@ -162,18 +167,31 @@
           <div class="setting-row"><div><strong>Keep original size</strong><small>Upscale then return to source dimensions</small></div><label class="switch"><input id="keep-size" type="checkbox"><span></span></label></div>
           <div class="setting-row"><div><strong>Facial restoration</strong><small>Apply GFPGAN face recovery</small></div><label class="switch"><input id="face-restoration" type="checkbox"><span></span></label></div>
           <div class="control-divider"></div>
-          <button class="button button-secondary full-button" id="upscale-button">Run Real-ESRGAN <span class="button-icon">↗</span></button>
+          <button class="button button-primary full-button" id="upscale-button">Run Real-ESRGAN <span class="button-icon">↗</span></button>
+          <div class="model-info" id="model-info" hidden></div>
         </div>
 
         <div class="controls" id="video-controls" hidden>
-          <div class="video-control-section">
+          <div class="video-control-section" data-tab="frame">
             <div class="section-label">FRAME ACTIONS</div>
             <div class="video-actions">
               <button class="button button-secondary full-button" id="crop-video-frame" disabled>Crop current frame <span class="button-icon">⌗</span></button>
               <button class="button button-secondary full-button" id="save-video-frame-side" disabled>Save frame as image <span class="button-icon">↧</span></button>
             </div>
           </div>
-          <div class="video-control-section">
+          <div class="video-control-section" data-tab="realtime">
+            <div class="section-label">REAL-TIME PREVIEW</div>
+            <div class="control-group">
+              <div class="control-label"><label for="video-realtime-resolution">Realtime resolution</label></div>
+              <select id="video-realtime-resolution" disabled></select>
+            </div>
+            <div class="control-group">
+              <div class="control-label"><label for="video-realtime-mode">Algorithm</label></div>
+              <select id="video-realtime-mode" disabled></select>
+            </div>
+            <p class="video-placeholder-note" id="realtime-status">Real-time preview is off.</p>
+          </div>
+          <div class="video-control-section" data-tab="upscale">
             <div class="section-label">UPSCALE SETTINGS</div>
             <div class="control-group">
               <div class="control-label"><label for="video-output-resolution">Output resolution</label></div>
@@ -183,17 +201,7 @@
               <div class="control-label"><label for="video-model-select">Model</label></div>
               <select id="video-model-select" disabled></select>
               <button class="button button-primary full-button" id="save-video-button" style="margin-top: 16px;" disabled>Upscale video <span class="button-icon">↗</span></button>
-            </div>
-          </div>
-          <div class="video-control-section">
-            <div class="section-label">REAL-TIME PREVIEW</div>
-            <div class="control-group">
-              <div class="control-label"><label for="video-realtime-resolution">Realtime resolution</label></div>
-              <select id="video-realtime-resolution" disabled></select>
-            </div>
-            <div class="control-group">
-              <div class="control-label"><label for="video-realtime-mode">Algorithm</label></div>
-              <select id="video-realtime-mode" disabled></select>
+              <div class="model-info" id="video-model-info" hidden></div>
             </div>
           </div>
         </div>

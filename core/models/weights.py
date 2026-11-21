@@ -43,6 +43,26 @@ def model_name(path):
     return path.stem
 
 
+# Compact (SRVGGNetCompact, ~1-2 MB) checkpoints; the RRDBNet models are much heavier.
+_COMPACT_MODEL_MARKERS = ("realesr-general", "animevideo", "compact")
+# RRDBNet models run 64-channel convolutions at the *output* resolution, so one inference needs an
+# output-sized tensor of that width. DirectML fails with 887A0001 above ~1.45 GB (fp16: 3456^2 at 8x
+# fails, 3328^2 works; fp32: 5.76 Mpx fails, 3.69 Mpx works) and then leaves the process without a
+# usable DML device. The limit is kept ~10 % below the largest verified output.
+_MAX_RRDB_OUTPUT_PIXELS_FP16 = 3200 * 3200
+
+
+def max_rrdb_output_pixels(model_stem):
+    """Largest output (pixels) one DirectML inference of an RRDBNet model may produce."""
+    if "fp16" in model_stem.lower():
+        return _MAX_RRDB_OUTPUT_PIXELS_FP16
+    return _MAX_RRDB_OUTPUT_PIXELS_FP16 // 2
+
+
+def is_compact_model(model_stem):
+    return any(marker in model_stem.lower() for marker in _COMPACT_MODEL_MARKERS)
+
+
 def model_label(name, backend):
     return name + _BACKEND_SUFFIX.format(backend)
 

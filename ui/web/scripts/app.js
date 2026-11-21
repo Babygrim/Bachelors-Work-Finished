@@ -1,4 +1,7 @@
 import { RealtimeMsePreview } from './realtime_mse.js';
+import { modelOptions, renderModelInfo, syncModelSelect } from './modules/model_info.js';
+import { createRealtimeAudio, setMuteButton } from './modules/realtime_audio.js';
+import { createInspectorTabs } from './modules/inspector_tabs.js';
 
 const $ = (selector) => document.querySelector(selector);
 const SLIDER_SETTING_KEYS = new Set(['Brightness', 'Color', 'Contrast', 'Sharpness', 'Blur']);
@@ -67,6 +70,13 @@ let stateRefreshQueued = false;
 let stateRefreshPromise = null;
 let imageLoading = false;
 let imageLoadToken = 0;
+// Effect changes: the loader (and control lock) appears only if the preview takes longer than this.
+const EFFECT_LOADER_DELAY_MS = 250;
+const EFFECT_UPDATE_TIMEOUT_MS = 30000;
+let effectPending = false;
+let effectBlocking = false;
+let effectLoaderTimer = null;
+let effectTimeoutTimer = null;
 let resultPreviewId = null;
 let jobPollTimer = null;
 let jobPollInFlight = false;
@@ -77,6 +87,12 @@ const realtimeMse = new RealtimeMsePreview(realtimePlayer, (error) => {
 }, () => {
   if (state?.video?.realtime_running) applyPreview(state);
 });
+const realtimeAudio = createRealtimeAudio({ videoPlayer, realtimePlayer, getState: () => state });
+const inspectorTabs = createInspectorTabs({
+  strip: document.querySelector('#inspector-tabs'),
+  resetButton: document.querySelector('#reset-module'),
+});
+realtimePlayer.addEventListener('timeupdate', () => realtimeAudio.update());
 
 function callApi(method, ...args) {
   const api = window.pywebview?.api;
@@ -132,7 +148,7 @@ async function pauseCurrentVideoForHistoryChange() {
 
 function setBusy(busy) {
   const imageUnavailable = !state?.has_image;
-  const blocked = busy || imageLoading || resultPreviewId || state?.image_loading;
+  const blocked = busy || imageLoading || resultPreviewId || effectBlocking || state?.image_loading;
   document.querySelectorAll('.controls input, .controls select, .controls button, .video-toolbar input, .video-toolbar button, .video-tools-bottom input, .video-tools-bottom button, .history-item, #remove-button, #open-button, #empty-open-button, #export-button, #crop-button, #reset-scale-button, #fit-button, #reset-module')
     .forEach((control) => {
       const importAction = control.id === 'open-button' || control.id === 'empty-open-button';
@@ -193,9 +209,7 @@ function syncVideoTimeline() {
   if (document.activeElement !== volume) {
     volume.value = videoPlayer.muted ? 0 : videoPlayer.volume;
   }
-  $('#video-mute').textContent = videoPlayer.muted ? '🔇' : '🔊';
-  $('#video-mute').title = videoPlayer.muted ? 'Unmute' : 'Mute';
-  $('#video-mute').setAttribute('aria-label', $('#video-mute').title);
+  setMuteButton($('#video-mute'), videoPlayer.muted);
 }
 
 function showVideoUpscaleStarting() {
@@ -590,9 +604,8 @@ function syncControls(next) {
   syncAdjustControls(next, pendingSettings);
   syncEnhanceControls(next, pendingSettings);
   const isVideo = next.kind === 'video';
-  $('#effects-controls').hidden = isVideo;
-  $('#enhance-controls').hidden = isVideo;
   $('#video-controls').hidden = !isVideo;
+  inspectorTabs.sync(next);
   $('#image-toolbar').hidden = isVideo;
   $('#video-toolbar').hidden = !isVideo;
   $('#video-tools-bottom').hidden = !isVideo;
@@ -627,11 +640,11 @@ function syncControls(next) {
     resolution.value = String(next.settings.enhancement.factor);
     resolution.disabled = job.running || next.video.realtime_running;
     const videoModel = $('#video-model-select');
-    if (videoModel.dataset.factor !== String(next.settings.enhancement.factor)) {
-      videoModel.replaceChildren(...next.models.map((name) => new Option(name, name)));
-      videoModel.dataset.factor = String(next.settings.enhancement.factor);
-    }
-    videoModel.value = next.settings.enhancement.model;
+    syncModelSelect(videoModel, next.models, next.model_info);
+    videoModel.value = pendingSettings.has('model')
+      ? pendingSettings.get('model')
+      : next.settings.enhancement.model;
+    renderModelInfo($('#video-model-info'), next.model_info?.[videoModel.value]);
     syncVideoTimeline();
     const videoScale = pendingScale?.entryId === next.current_id ? pendingScale.value : next.scale || 1;
     if (document.activeElement !== $('#video-zoom')) {
@@ -656,6 +669,12 @@ function syncControls(next) {
       || !next.video.realtime_options?.length;
     $('#video-realtime').classList.toggle('active', next.video.realtime_running);
     $('#video-realtime').textContent = next.video.realtime_running ? 'FX✓' : 'FX';
+    const diagnostics = next.debug;
+    $('#realtime-status').textContent = !next.video.realtime_running
+      ? 'Real-time preview is off. Toggle FX in the video toolbar to start it.'
+      : next.video.realtime_loading
+        ? next.video.realtime_stage || 'Preparing real-time preview'
+        : `Running · ${Number(diagnostics?.fps || 0).toFixed(1)} fps · ${diagnostics?.device || 'GPU'}`;
     const realtimeResolution = $('#video-realtime-resolution');
     const realtimeMode = $('#video-realtime-mode');
     const realtimeOptions = next.video.realtime_options || [];
@@ -671,9 +690,7 @@ function syncControls(next) {
     );
     const compatibleModels = selectedOption?.models || [];
     const selectedRealtimeModel = realtimeMode.value;
-    realtimeMode.replaceChildren(
-      ...compatibleModels.map((name) => new Option(name, name)),
-    );
+    realtimeMode.replaceChildren(...modelOptions(compatibleModels, next.model_info));
     realtimeMode.value = compatibleModels.includes(selectedRealtimeModel)
       ? selectedRealtimeModel
       : compatibleModels.includes(next.video.realtime_model)
@@ -742,6 +759,10 @@ async function fetchAndApplyState() {
     state = next;
     applyPreview(next);
     syncControls(next);
+    realtimeAudio.update();
+    if (effectPending && !pendingSettings.size && !settingsFlushInProgress && !next.preview_loading) {
+      endEffectUpdate();
+    }
     if (next.history) renderHistory(next);
     updateHistorySelection(next.current_id);
   } catch (error) {
@@ -800,8 +821,45 @@ function startPolling() {
   jobPollTimer = setInterval(pollJobState, 150);
 }
 
+function beginEffectUpdate() {
+  effectPending = true;
+  if (!effectBlocking) {
+    // Restarted on every change: the loader only appears once the user stops adjusting
+    // and the backend is still busy, so dragging a slider is never interrupted.
+    clearTimeout(effectLoaderTimer);
+    effectLoaderTimer = setTimeout(() => {
+      effectLoaderTimer = null;
+      if (!effectPending) return;
+      effectBlocking = true;
+      $('#effect-loading').hidden = false;
+      setBusy(false);
+    }, EFFECT_LOADER_DELAY_MS);
+  }
+  clearTimeout(effectTimeoutTimer);
+  effectTimeoutTimer = setTimeout(() => {
+    if (!effectPending) return;
+    endEffectUpdate();
+    setToast('Applying the effect is taking too long.', 'error');
+  }, EFFECT_UPDATE_TIMEOUT_MS);
+}
+
+async function endEffectUpdate() {
+  if (!effectPending) return;
+  effectPending = false;
+  clearTimeout(effectLoaderTimer);
+  clearTimeout(effectTimeoutTimer);
+  effectLoaderTimer = null;
+  if (!effectBlocking) return;
+  // Keep the loader until the browser has decoded the new preview, so the swap is not visible.
+  await $('#preview-image').decode().catch(() => {});
+  effectBlocking = false;
+  $('#effect-loading').hidden = true;
+  setBusy(state?.job.running ?? false);
+}
+
 function setSetting(key, value) {
   pendingSettings.set(key, value);
+  if (SLIDER_SETTING_KEYS.has(key) || key === 'Inversion') beginEffectUpdate();
   if (settingTimer) return;
   settingTimer = setTimeout(flushSettings, 50);
 }
@@ -819,6 +877,7 @@ async function flushSettings() {
     await refreshState();
   } catch (error) {
     setToast(error.message, 'error');
+    endEffectUpdate();
   } finally {
     settingsFlushInProgress = false;
     if (pendingSettings.size && !settingTimer) settingTimer = setTimeout(flushSettings, 50);
@@ -881,7 +940,7 @@ $('#remove-button').addEventListener('click', async () => {
     await runAction('remove_image');
   }
 });
-$('#reset-module').addEventListener('click', () => runAction('reset_module'));
+$('#reset-module').addEventListener('click', () => runAction('reset_module', inspectorTabs.resetScope()));
 $('#cancel-job').addEventListener('click', async () => {
   $('#cancel-job').disabled = true;
   try {
@@ -898,6 +957,9 @@ async function initialize() {
     .filter(([, available]) => !available)
     .forEach(([name]) => disableUnavailableFeature(name));
 
+  $('#video-model-select').addEventListener('change', (event) => {
+    renderModelInfo($('#video-model-info'), state?.model_info?.[event.target.value]);
+  });
   bindAdjustControls(setSetting, runAction);
   bindEnhanceControls(setSetting, runAction);
   bindVideoControls({

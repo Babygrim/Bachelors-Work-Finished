@@ -1,8 +1,12 @@
 from core.models.weights import BACKEND_NCNN, resolve_model
 
 
-def create_upscaler(model, factor, tile, tile_pad, num_threads=2):
-    """Build the upscaler (ONNX/DirectML or ncnn/Vulkan) selected by a UI model label."""
+def create_upscaler(model, factor, tile, tile_pad, num_threads=2, frame_size=None):
+    """Build the upscaler (ONNX/DirectML or ncnn/Vulkan) selected by a UI model label.
+
+    `frame_size` ((width, height) of the video) makes the DirectML upscaler process whole frames
+    as a single tile; the ncnn backend ignores it.
+    """
     resolved = resolve_model(model, factor)
     if resolved is None:
         raise FileNotFoundError(f"Weight file not found for model: {model}")
@@ -27,6 +31,7 @@ def create_upscaler(model, factor, tile, tile_pad, num_threads=2):
         tile=tile,
         tile_pad=tile_pad,
         num_threads=num_threads,
+        frame_size=frame_size,
     )
 
 

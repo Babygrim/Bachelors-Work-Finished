@@ -146,9 +146,13 @@ class SettingsManager:
             log_event("setting_changed", key=key, value=value)
         return True
     
-    def reset_module(self):
+    def reset_module(self, scope=None):
         """Reset settings to defaults.
-        
+
+        Args:
+            scope: 'adjust' (image effects), 'upscale' (upscale settings) or None for everything
+                that applies to the current media.
+
         Returns:
             True if successful, False otherwise
         """
@@ -157,10 +161,17 @@ class SettingsManager:
             if not entry or entry["image_loading"] or self.module._job["running"]:
                 return False
             if entry["kind"] == "image":
-                entry["settings"]["effects"] = {**SLIDER_DEFAULTS, "Inversion": False}
-                entry["settings"]["enhancement"] = self.module._default_settings()["enhancement"]
-                self.module._touch(preview=True)
-            else:
-                entry["settings"]["enhancement"] = self.module._default_settings()["enhancement"]
+                if scope in (None, "adjust"):
+                    entry["settings"]["effects"] = {**SLIDER_DEFAULTS, "Inversion": False}
+                if scope in (None, "upscale"):
+                    entry["settings"]["enhancement"] = self.module._default_settings()["enhancement"]
+                self.module._touch(preview=scope in (None, "adjust"))
+            elif scope in (None, "upscale"):
+                enhancement = self.module._default_settings()["enhancement"]
+                # The default 2x option may be merged into a 1080p option for this video.
+                first_option = self.module._video_output_options(entry)[0]["factor"]
+                models = self.module._video_models_for_factor(first_option, entry)
+                enhancement.update(factor=first_option, model=models[0] if models else "")
+                entry["settings"]["enhancement"] = enhancement
                 self.module._touch()
         return True

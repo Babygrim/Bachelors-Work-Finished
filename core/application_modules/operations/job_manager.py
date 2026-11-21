@@ -87,15 +87,18 @@ class JobManager:
             self.module._cancel_event = threading.Event()
             self.module._touch()
             
+            log_details = {"operation": operation, "image_size": list(image.size)}
+            if operation == "upscale":
+                log_details.update(model=options["model"], factor=options["factor"])
             self.module._job_thread = threading.Thread(
                 target=self._process_operation,
-                args=(function, image, arguments, self.module._cancel_event),
+                args=(function, image, arguments, self.module._cancel_event, log_details),
                 daemon=True,
             )
             self.module._job_thread.start()
         return True
     
-    def _process_operation(self, function, image, arguments, cancel_event):
+    def _process_operation(self, function, image, arguments, cancel_event, log_details=None):
         """Process image operation with progress tracking and time estimation.
         
         Args:
@@ -103,6 +106,7 @@ class JobManager:
             image: Input image
             arguments: Function arguments
             cancel_event: Event to signal cancellation
+            log_details: Extra fields for the start/finish log events
         """
         result_queue = multiprocessing.Queue()
         progress_queue = multiprocessing.Queue()
@@ -114,6 +118,10 @@ class JobManager:
         
         time_estimator = UpscalingTimeEstimator()
         start_time = time.time()
+        log_details = log_details or {}
+        outcome = "interrupted"
+        error_text = None
+        log_event("image_operation_started", **log_details)
         
         with self.module._lock:
             self.module._process = process
@@ -191,9 +199,12 @@ class JobManager:
                         "kind": kind,
                         "error": None,
                     }
+                outcome = "completed"
                 return
         
         except Exception as error:
+            outcome = "failed"
+            error_text = str(error)
             with self.module._lock:
                 kind = self.module._job.get("kind", "processing")
                 self.module._job = {
@@ -207,6 +218,17 @@ class JobManager:
                 self.module._touch()
         
         finally:
+            if cancel_event.is_set() and outcome != "completed":
+                outcome = "cancelled"
+            finished = {
+                **log_details,
+                "outcome": outcome,
+                "elapsed_seconds": round(time.time() - start_time, 2),
+            }
+            if error_text:
+                finished["error"] = error_text
+            log_event("image_operation_finished", **finished)
+            
             if process.pid is not None:
                 if process.is_alive():
                     process.join(timeout=0.2)

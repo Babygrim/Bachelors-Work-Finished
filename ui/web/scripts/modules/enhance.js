@@ -1,3 +1,5 @@
+import { renderModelInfo, syncModelSelect } from './model_info.js';
+
 export function syncEnhanceControls(next, pendingSettings) {
   const enhancement = next.settings.enhancement;
   const factor = pendingSettings.has('factor')
@@ -14,14 +16,12 @@ export function syncEnhanceControls(next, pendingSettings) {
     : enhancement.face_restoration;
 
   const model = document.querySelector('#model-select');
-  if (model.dataset.factor !== String(enhancement.factor)) {
-    model.replaceChildren(...next.models.map((name) => new Option(name, name)));
-    model.dataset.factor = String(enhancement.factor);
-  }
+  syncModelSelect(model, next.models, next.model_info);
   model.value = pendingSettings.has('model')
     ? pendingSettings.get('model')
     : enhancement.model;
   model.disabled = !next.models.length;
+  renderModelInfo(document.querySelector('#model-info'), next.model_info?.[model.value]);
   document.querySelector('#upscale-button').disabled = !next.models.length || next.job.running;
 }
 

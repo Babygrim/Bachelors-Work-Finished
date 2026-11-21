@@ -1,3 +1,5 @@
+import { setMuteButton } from './realtime_audio.js';
+
 export function bindVideoControls({
   $, callApi, runAction, getState, videoPlayer, realtimePlayer, syncVideoTimeline,
   applyPreview, setScale, setToast, getVideoNativeSize, setVideoNativeSize,
@@ -221,9 +223,7 @@ export function bindVideoControls({
   });
   $('#video-mute').addEventListener('click', () => {
     videoPlayer.muted = !videoPlayer.muted;
-    $('#video-mute').textContent = videoPlayer.muted ? '🔇' : '🔊';
-    $('#video-mute').title = videoPlayer.muted ? 'Unmute' : 'Mute';
-    $('#video-mute').setAttribute('aria-label', $('#video-mute').title);
+    setMuteButton($('#video-mute'), videoPlayer.muted);
     syncVideoTimeline();
   });
   $('#video-volume').addEventListener('input', (event) => {

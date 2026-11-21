@@ -1,5 +1,6 @@
 """Media export and processing utilities for saving images and videos."""
 
+import queue
 import shutil
 import subprocess
 import tempfile
@@ -20,6 +21,9 @@ from core.services.realtime_video import RealTimeVideoProcessor
 from core.services.time_estimator import UpscalingTimeEstimator, format_time_estimate
 from core.application_modules.shared import SLIDER_DEFAULTS
 from core.services.ffmpeg_utils import find_ffmpeg_path
+
+# Frames buffered between the decode, GPU and encode stages of the video upscale pipeline.
+VIDEO_PIPELINE_DEPTH = 2
 
 
 def save_image_dialog(media_module):
@@ -320,6 +324,25 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
     capture = cv2.VideoCapture(str(source_path))
     writer = None
     silent_output = f"{output_path}.silent.mp4"
+    worker_started = time.monotonic()
+    processing_started = worker_started
+    frame_index = 0
+    total = 0
+    outcome = None
+    processing_device = "CPU"
+
+    def finish_details(**extra):
+        elapsed = time.monotonic() - worker_started
+        return {
+            "model": options["model"],
+            "factor": options["factor"],
+            "device": processing_device,
+            "frames_processed": frame_index,
+            "frames_total": total,
+            "total_seconds": round(elapsed, 2),
+            "processing_seconds": round(time.monotonic() - processing_started, 2),
+            **extra,
+        }
     
     try:
         if not capture.isOpened():
@@ -350,9 +373,14 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
         
         if not is_cpu_model:
             from core.models.factory import create_upscaler, device_label
+            from core.models.weights import split_model_label
+            from core.services.upscalers.gpu_realtime import uses_full_frame
             
+            # Whole-frame inference avoids the 448x448-per-384x384 tile padding (2.3x less GPU work at 540p).
+            full_frame = uses_full_frame(source_size, scale, split_model_label(options["model"])[0])
             upscaler = create_upscaler(
                 options["model"], scale, IMAGE_TILE_SIZE, IMAGE_TILE_OVERLAP,
+                frame_size=source_size if full_frame else None,
             )
             processing_device = device_label(upscaler)
         
@@ -362,98 +390,154 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
         # Get initial time estimate from job
         time_estimate = media_module._job.get("time_estimate", {})
         
-        while not cancel_event.is_set():
-            success, frame = capture.read()
-            if not success:
-                break
-            
-            current_frame = frame_index + 1
-            elapsed_seconds = time.monotonic() - processing_started
-            
-            # Calculate remaining time estimate
-            time_remaining_seconds = 0
-            if current_frame > 0 and time_estimate:
-                fps_actual = current_frame / elapsed_seconds if elapsed_seconds > 0 else 0
-                frames_remaining = total - current_frame
-                time_remaining_seconds = frames_remaining / fps_actual if fps_actual > 0 else 0
-            
-            # Format remaining time
-            remaining_hours = int(time_remaining_seconds // 3600)
-            remaining_minutes = int((time_remaining_seconds % 3600) // 60)
-            remaining_seconds = int(time_remaining_seconds % 60)
-            
-            if remaining_hours > 0:
-                time_remaining_formatted = f"{remaining_hours}h {remaining_minutes}m {remaining_seconds}s"
-            elif remaining_minutes > 0:
-                time_remaining_formatted = f"{remaining_minutes}m {remaining_seconds}s"
-            else:
-                time_remaining_formatted = f"{remaining_seconds}s"
-            
-            with media_module._lock:
-                media_module._job.update(
-                    status="Processing video",
-                    current=current_frame,
-                    total=total,
-                    progress=round(current_frame * 100 / total) if total else 0,
-                    time_remaining=time_remaining_seconds,
-                    time_remaining_formatted=time_remaining_formatted,
-                    time_estimate_formatted=time_estimate.get("formatted", "") if time_estimate else '',
+        keep_source_size = options["keep_size"] and not is_target(options["factor"])
+        status = "Processing video"
+        stop = threading.Event()
+        pipeline_errors = []
+        source_frames = queue.Queue(maxsize=VIDEO_PIPELINE_DEPTH)
+        upscaled_frames = queue.Queue(maxsize=VIDEO_PIPELINE_DEPTH)
+
+        def interrupted():
+            return stop.is_set() or cancel_event.is_set()
+
+        def fail(error):
+            pipeline_errors.append(error)
+            stop.set()
+
+        def put(q, item):
+            while not interrupted():
+                try:
+                    q.put(item, timeout=0.1)
+                    return True
+                except queue.Full:
+                    pass
+            return False
+
+        def get(q):
+            # None means "stop": the end-of-stream sentinel or an interruption.
+            while not interrupted():
+                try:
+                    return q.get(timeout=0.1)
+                except queue.Empty:
+                    pass
+            return None
+
+        def read_frames():
+            # Decode + effects run here so they overlap GPU inference.
+            try:
+                while not interrupted():
+                    success, frame = capture.read()
+                    if not success:
+                        break
+                    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGB")
+                    image = media_module._apply_effects(
+                        image, {"effects": SLIDER_DEFAULTS | {"Inversion": False}}
+                    )
+                    source_frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                    if not put(source_frames, (frame.shape[1::-1], source_frame)):
+                        return
+            except Exception as error:
+                fail(error)
+            finally:
+                put(source_frames, None)
+
+        def write_frames():
+            # Resize + encode + progress run here so they overlap GPU inference.
+            nonlocal writer, frame_index
+            try:
+                while True:
+                    item = get(upscaled_frames)
+                    if item is None:
+                        return
+                    output, source_frame_size = item
+
+                    if output.shape[1::-1] != target_size:
+                        output = cv2.resize(output, target_size, interpolation=cv2.INTER_AREA)
+                    if keep_source_size:
+                        output = cv2.resize(output, source_frame_size, interpolation=cv2.INTER_AREA)
+
+                    if writer is None:
+                        height, width = output.shape[:2]
+                        writer = cv2.VideoWriter(
+                            silent_output,
+                            cv2.VideoWriter_fourcc(*"mp4v"),
+                            fps,
+                            (width, height),
+                        )
+                        if not writer.isOpened():
+                            raise RuntimeError(f"Could not create video: {output_path}")
+
+                    writer.write(output)
+                    frame_index += 1
+
+                    elapsed_seconds = time.monotonic() - processing_started
+                    fps_actual = frame_index / elapsed_seconds if elapsed_seconds > 0 else 0.0
+                    time_remaining_seconds = 0
+                    if time_estimate and fps_actual > 0:
+                        time_remaining_seconds = max(0, total - frame_index) / fps_actual
+
+                    remaining_hours = int(time_remaining_seconds // 3600)
+                    remaining_minutes = int((time_remaining_seconds % 3600) // 60)
+                    remaining_seconds = int(time_remaining_seconds % 60)
+                    if remaining_hours > 0:
+                        time_remaining_formatted = f"{remaining_hours}h {remaining_minutes}m {remaining_seconds}s"
+                    elif remaining_minutes > 0:
+                        time_remaining_formatted = f"{remaining_minutes}m {remaining_seconds}s"
+                    else:
+                        time_remaining_formatted = f"{remaining_seconds}s"
+
+                    with media_module._lock:
+                        media_module._job.update(
+                            status=status,
+                            current=frame_index,
+                            total=total,
+                            progress=round(frame_index * 100 / total) if total else 0,
+                            time_remaining=time_remaining_seconds,
+                            time_remaining_formatted=time_remaining_formatted,
+                            processing_fps=fps_actual,
+                            processing_device=processing_device,
+                            ram_bytes=process_memory_bytes(),
+                            gpu_memory_bytes=gpu_memory_bytes(),
+                            time_estimate_formatted=time_estimate.get("formatted", "") if time_estimate else '',
+                        )
+                        media_module._touch()
+            except Exception as error:
+                fail(error)
+
+        with media_module._lock:
+            media_module._job.update(status=status)
+            media_module._touch()
+
+        reader = threading.Thread(target=read_frames, daemon=True)
+        frame_writer = threading.Thread(target=write_frames, daemon=True)
+        reader.start()
+        frame_writer.start()
+
+        try:
+            while True:
+                item = get(source_frames)
+                if item is None:
+                    break
+                source_frame_size, source_frame = item
+                output = (
+                    upscaler.enhance(source_frame)
+                    if upscaler is not None
+                    else RealTimeVideoProcessor._process_frame(source_frame, None, target_size)
                 )
-                media_module._touch()
-            
-            # Apply effects to frame
-            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGB")
-            image = media_module._apply_effects(image, {"effects": SLIDER_DEFAULTS | {"Inversion": False}})
-            source_frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-            
-            # Upscale frame
-            output = (
-                upscaler.enhance(source_frame)
-                if upscaler is not None
-                else RealTimeVideoProcessor._process_frame(source_frame, None, target_size)
-            )
-            
-            if output.shape[1::-1] != target_size:
-                output = cv2.resize(output, target_size, interpolation=cv2.INTER_AREA)
-            
-            if options["keep_size"] and not is_target(options["factor"]):
-                output = cv2.resize(
-                    output,
-                    (frame.shape[1], frame.shape[0]),
-                    interpolation=cv2.INTER_AREA,
-                )
-            
-            # Initialize video writer
-            if writer is None:
-                height, width = output.shape[:2]
-                writer = cv2.VideoWriter(
-                    silent_output,
-                    cv2.VideoWriter_fourcc(*"mp4v"),
-                    fps,
-                    (width, height),
-                )
-                if not writer.isOpened():
-                    raise RuntimeError(f"Could not create video: {output_path}")
-            
-            writer.write(output)
-            frame_index += 1
-            
-            with media_module._lock:
-                media_module._job.update(
-                    current=frame_index,
-                    total=total,
-                    progress=round(frame_index * 100 / total) if total else 0,
-                    processing_fps=(
-                        frame_index / (time.monotonic() - processing_started)
-                        if time.monotonic() > processing_started else 0.0
-                    ),
-                    processing_device=processing_device,
-                    ram_bytes=process_memory_bytes(),
-                    gpu_memory_bytes=gpu_memory_bytes(),
-                    time_estimate_formatted=time_estimate.get("formatted", "") if time_estimate else '',
-                )
-                media_module._touch()
-        
+                if not put(upscaled_frames, (output, source_frame_size)):
+                    break
+        except Exception as error:
+            fail(error)
+        finally:
+            # Flush queued frames to the writer unless cancelled/failed, then stop the reader.
+            put(upscaled_frames, None)
+            frame_writer.join()
+            stop.set()
+            reader.join()
+
+        if pipeline_errors:
+            raise pipeline_errors[0]
+
         if cancel_event.is_set():
             return
         
@@ -503,7 +587,8 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
             text=True,
         )
     except Exception as error:
-        log_event("video_upscale_failed", error=str(error))
+        outcome = "failed"
+        log_event("video_upscale_failed", **finish_details(outcome=outcome, error=str(error)))
         try:
             Path(output_path).unlink(missing_ok=True)
         except OSError:
@@ -522,11 +607,15 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
     else:
         # Record actual processing time for calibration
         actual_time = time.monotonic() - processing_started
+        outcome = "completed"
         log_event(
             "video_upscale_completed",
-            actual_time_seconds=round(actual_time, 2),
-            frames_processed=frame_index,
-            fps_actual=round(frame_index / actual_time, 2) if actual_time > 0 else 0,
+            **finish_details(
+                outcome=outcome,
+                actual_time_seconds=round(actual_time, 2),
+                frames_processed=frame_index,
+                fps_actual=round(frame_index / actual_time, 2) if actual_time > 0 else 0,
+            ),
         )
         
         try:
@@ -569,6 +658,8 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
             writer.release()
         
         if cancel_event.is_set():
+            if outcome is None:
+                log_event("video_upscale_cancelled", **finish_details(outcome="cancelled"))
             try:
                 Path(output_path).unlink(missing_ok=True)
                 Path(silent_output).unlink(missing_ok=True)

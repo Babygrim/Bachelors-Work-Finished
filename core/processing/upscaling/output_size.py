@@ -3,6 +3,7 @@
 from core.processing.upscaling.sizing import (
     is_target,
     output_plan,
+    resolution_label,
     target_label,
     MODEL_FACTORS,
     TARGET_HEIGHTS,
@@ -11,6 +12,7 @@ from core.processing.upscaling.sizing import (
 __all__ = [
     'is_target',
     'output_plan',
+    'resolution_label',
     'target_label',
     'MODEL_FACTORS',
     'TARGET_HEIGHTS',

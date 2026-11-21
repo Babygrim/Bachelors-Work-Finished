@@ -32,3 +32,12 @@ def target_label(factor, size):
     """Generate a human-readable label for a target height."""
     name = "1080p Full HD" if int(factor) == 1080 else "2160p 4K"
     return f"{name} ({size[0]} × {size[1]})"
+
+
+_HEIGHT_NAMES = {1080: "1080p Full HD", 2160: "2160p 4K", 4320: "4320p 8K"}
+
+
+def resolution_label(width, height):
+    """Label for any output size: standard heights get their name, others 'W × H'."""
+    name = _HEIGHT_NAMES.get(height)
+    return f"{name} ({width} × {height})" if name else f"{width} × {height}"

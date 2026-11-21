@@ -2,15 +2,24 @@ import math
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
 
 from core.config.constants import ROOT_DIR
+from core.services.app_logging import log_event
 from core.services.performance import gpu_memory_bytes, process_memory_bytes
 from core.services.upscalers.constants import AMD_VIDEO_SR_MODEL, AMF_PREVIEW_BUFFER_SECONDS, AMF_PIPELINE_DEPTH
 from core.services.upscalers.opencv_upscaler import _RealtimeUpscaler
 from core.services.upscalers.amf_upscaler import _AMFRealtimeUpscaler
+from core.services.upscalers.chroma import source_chroma_plane
+from core.services.upscalers.gpu_realtime import (
+    gpu_realtime_model_name,
+    gpu_realtime_model_scale,
+    is_gpu_realtime_model,
+    uses_full_frame,
+)
 from core.services.upscalers.frame_cache import _shared_cache, _RealtimeFrameCache
 from core.services.encoders.h264_encoder import _AMFH264PreviewEncoder
 
@@ -57,6 +66,9 @@ class RealTimeVideoProcessor:
         self._startup_buffer_frames_required = 1
         self._startup_buffer_frames_sent = 0
         self._position = 0.0
+        self._session_started_at = time.monotonic()
+        self._session_start_sequence = 0
+        self._session_start_position = 0.0
         self._stream_revision = 0
         self._stream_offset = 0.0
 
@@ -197,6 +209,8 @@ class RealTimeVideoProcessor:
             "device": (
                 "GPU (AMD AMF VideoSR + H.264 AMF) + CPU frame readback"
                 if self.model == AMD_VIDEO_SR_MODEL
+                else "GPU (DirectML Real-ESRGAN)"
+                if is_gpu_realtime_model(self.model)
                 else "CPU (OpenCV dnn_superres)"
             ),
             "ram_bytes": process_memory_bytes(),
@@ -221,6 +235,9 @@ class RealTimeVideoProcessor:
         self._loading_stage = "Opening video"
         self._startup_buffer_frames_sent = 0
         self._position = max(0.0, float(position))
+        self._session_started_at = time.monotonic()
+        self._session_start_sequence = self._sequence
+        self._session_start_position = self._position
         self._stream_revision = 0
         self._stream_offset = self._position
         self._h264_stream = None
@@ -264,6 +281,7 @@ class RealTimeVideoProcessor:
 
     def _run(self, position):
         capture = cv2.VideoCapture(str(self.path))
+        encoder_pool = None
         try:
             if not capture.isOpened():
                 raise RuntimeError(f"Could not open video: {self.path.name}")
@@ -277,22 +295,37 @@ class RealTimeVideoProcessor:
                 return
 
             self._set_loading_stage("Loading real-time model")
-            realtime_weights = Path(ROOT_DIR, "weights", "realtime")
-            model_paths = sorted(
-                (
-                    path for path in realtime_weights.iterdir()
-                    if path.stem == self.model
-                    and path.suffix.lower() in (".pb", ".onnx")
-                )
-            ) if realtime_weights.is_dir() else []
-            if not model_paths:
-                raise FileNotFoundError(
-                    f"Real-time model not found in weights/realtime: {self.model}"
-                )
-            upscaler = _RealtimeUpscaler(model_paths[0])
+            if is_gpu_realtime_model(self.model):
+                upscaler = self._create_gpu_upscaler(capture)
+            else:
+                realtime_weights = Path(ROOT_DIR, "weights", "realtime")
+                model_paths = sorted(
+                    (
+                        path for path in realtime_weights.iterdir()
+                        if path.stem == self.model
+                        and path.suffix.lower() in (".pb", ".onnx")
+                    )
+                ) if realtime_weights.is_dir() else []
+                if not model_paths:
+                    raise FileNotFoundError(
+                        f"Real-time model not found in weights/realtime: {self.model}"
+                    )
+                upscaler = _RealtimeUpscaler(model_paths[0])
             self._set_loading_stage("Upscaling first frame")
             frame_interval = 1.0 / fps
             next_frame_time = time.monotonic()
+            # GPU upscaling is fast enough that JPEG encoding of the large output would become
+            # the bottleneck, so it runs one frame behind on a worker thread.
+            if is_gpu_realtime_model(self.model):
+                encoder_pool = ThreadPoolExecutor(max_workers=1)
+            inflight = None
+
+            def complete(item):
+                index, future = item
+                encoded = future.result()
+                if encoded is not None:
+                    self._cache_frame(index, encoded)
+                    self._publish_jpeg(encoded, index, fps)
 
             while not self._stop_event.is_set():
                 with self._condition:
@@ -301,42 +334,40 @@ class RealTimeVideoProcessor:
                 if seek_position is not None:
                     frame_index = max(0, round(seek_position * fps))
                     capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                    inflight = None
                 if (
-                    self._pause_event.wait(0.05)
+                    self._pause_event.is_set()
                     and seek_position is None
                     and not self._loading
                 ):
+                    # Event.wait() on an unset event would block every frame for the timeout.
+                    self._stop_event.wait(0.05)
                     continue
                 success, frame = capture.read()
                 if not success:
                     break
                 cached = self._get_cached_frame(frame_index)
                 if cached is not None:
-                    encoded = cached
+                    if inflight:
+                        complete(inflight)
+                        inflight = None
                     self._cache_hits += 1
+                    self._publish_jpeg(cached, frame_index, fps)
                 else:
                     self._cache_misses += 1
                     output = self._process_frame(frame, upscaler, self.output_size)
-                    success, encoded_image = cv2.imencode(
-                        ".jpg",
-                        output,
-                        [cv2.IMWRITE_JPEG_QUALITY, 85],
-                    )
-                    if not success:
-                        frame_index += 1
-                        continue
-                    encoded = encoded_image.tobytes()
-                    self._cache_frame(frame_index, encoded)
-                with self._condition:
-                    self._latest_jpeg = encoded
-                    self._latest_nv12 = None
-                    if self._loading:
-                        self._loading_stage = "Preparing first preview frame"
-                    self._loading = False
-                    self._position = frame_index / fps
-                    self._sequence += 1
-                    self._update_processing_fps()
-                    self._condition.notify_all()
+                    if encoder_pool is None:
+                        encoded = self._encode_jpeg(output)
+                        if encoded is None:
+                            frame_index += 1
+                            continue
+                        self._cache_frame(frame_index, encoded)
+                        self._publish_jpeg(encoded, frame_index, fps)
+                    else:
+                        previous = inflight
+                        inflight = (frame_index, encoder_pool.submit(self._encode_jpeg, output))
+                        if previous:
+                            complete(previous)
                 frame_index += 1
                 next_frame_time += frame_interval
                 delay = next_frame_time - time.monotonic()
@@ -344,12 +375,17 @@ class RealTimeVideoProcessor:
                     self._stop_event.wait(delay)
                 else:
                     next_frame_time = time.monotonic()
+            if inflight and not self._stop_event.is_set():
+                complete(inflight)
         except Exception as error:
             if not self._stop_event.is_set():
                 with self._condition:
                     self._error = str(error)
                     self._condition.notify_all()
         finally:
+            if encoder_pool is not None:
+                encoder_pool.shutdown(wait=False)
+            self._log_session_finished()
             capture.release()
             with self._amf_pipeline_lock:
                 pipeline = self._amf_pipeline
@@ -359,6 +395,74 @@ class RealTimeVideoProcessor:
             with self._condition:
                 self._running = False
                 self._condition.notify_all()
+
+    def _log_session_finished(self):
+        elapsed = time.monotonic() - self._session_started_at
+        frames = self._sequence - self._session_start_sequence
+        if self._error:
+            outcome = "failed"
+        elif self._stop_event.is_set():
+            outcome = "stopped"
+        else:
+            outcome = "ended"
+        details = {
+            "outcome": outcome,
+            "model": self.model,
+            "factor": self.scale,
+            "elapsed_seconds": round(elapsed, 2),
+            "frames_published": frames,
+            "avg_fps": round(frames / elapsed, 2) if elapsed > 0 else 0,
+            "start_position": round(self._session_start_position, 2),
+            "end_position": round(self._position, 2),
+            "cache_hits": self._cache_hits,
+            "cache_misses": self._cache_misses,
+        }
+        if self._error:
+            details["error"] = self._error
+        log_event("realtime_session_finished", **details)
+
+    @staticmethod
+    def _encode_jpeg(frame):
+        success, encoded_image = cv2.imencode(
+            ".jpg",
+            frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 85],
+        )
+        return encoded_image.tobytes() if success else None
+
+    def _publish_jpeg(self, encoded, frame_index, fps):
+        with self._condition:
+            self._latest_jpeg = encoded
+            self._latest_nv12 = None
+            if self._loading:
+                self._loading_stage = "Preparing first preview frame"
+            self._loading = False
+            self._position = frame_index / fps
+            self._sequence += 1
+            self._update_processing_fps()
+            self._condition.notify_all()
+
+    def _create_gpu_upscaler(self, capture):
+        from core.config.constants import IMAGE_TILE_OVERLAP, IMAGE_TILE_SIZE
+        from core.models.factory import create_upscaler
+        from core.models.weights import BACKEND_DIRECTML, model_label
+
+        frame_size = (
+            int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        )
+        scale = gpu_realtime_model_scale(self.model)
+        return create_upscaler(
+            model_label(gpu_realtime_model_name(self.model), BACKEND_DIRECTML),
+            scale,
+            IMAGE_TILE_SIZE,
+            IMAGE_TILE_OVERLAP,
+            frame_size=(
+                frame_size
+                if uses_full_frame(frame_size, scale, gpu_realtime_model_name(self.model))
+                else None
+            ),
+        )
 
     def _run_amf(self, capture, fps, frame_index):
         if not self.ffmpeg_path:
@@ -424,14 +528,18 @@ class RealTimeVideoProcessor:
                     with self._amf_pipeline_lock:
                         self._amf_pipeline = pipeline
                 pipeline.send_frame(frame)
-                pending_frames.append((frame_index, frame_started))
+                # Built while AMF works on the frame, so it costs no extra latency.
+                pending_frames.append(
+                    (frame_index, frame_started, source_chroma_plane(frame, output_size))
+                )
                 frame_index += 1
                 if len(pending_frames) < AMF_PIPELINE_DEPTH:
                     continue
                 output = pipeline.read_frame()
                 if output is None:
                     raise RuntimeError("AMD VideoSR ended before returning a frame.")
-                output_index, output_started = pending_frames.popleft()
+                output_index, output_started, source_chroma = pending_frames.popleft()
+                self._apply_source_chroma(output, source_chroma)
                 if h264_stream is None:
                     self._set_loading_stage("Preparing H.264 preview")
                     h264_stream = _AMFH264PreviewEncoder(
@@ -465,7 +573,8 @@ class RealTimeVideoProcessor:
                     output = pipeline.read_frame()
                     if output is None:
                         raise RuntimeError("AMD VideoSR ended before flushing the last frame.")
-                    output_index, output_started = pending_frames.popleft()
+                    output_index, output_started, source_chroma = pending_frames.popleft()
+                    self._apply_source_chroma(output, source_chroma)
                     if h264_stream is None:
                         h264_stream = _AMFH264PreviewEncoder(
                             self.ffmpeg_path,
@@ -493,6 +602,11 @@ class RealTimeVideoProcessor:
                 self._set_h264_stream(None)
             with self._amf_pipeline_lock:
                 self._amf_pipeline = None
+
+    @staticmethod
+    def _apply_source_chroma(nv12_frame, source_chroma):
+        # AMF SR1.0 only upscales luma well; its UV plane is replaced with the source chroma.
+        nv12_frame[nv12_frame.shape[0] * 2 // 3:] = source_chroma
 
     def _publish_amf_frame(self, frame, frame_index, fps, h264_stream, frame_started):
         h264_stream.send_frame(frame)

@@ -28,8 +28,10 @@ def upscale_image(input_image, progress_bar_queue, keep_size, model, face_restor
             bg_upsampler=upscaler,
             arch='clean',
         )
-        final_image = upscaler_GFPGAN.enhance(np.array(input_image), progress_queue=progress_bar_queue)
-        final_image = Image.fromarray(final_image)
+        # GFPGAN / facexlib work on BGR arrays (the face model gets wrong colours from RGB input).
+        bgr = cv2.cvtColor(np.array(input_image.convert("RGB")), cv2.COLOR_RGB2BGR)
+        restored_bgr = upscaler_GFPGAN.enhance(bgr, progress_queue=progress_bar_queue)
+        final_image = Image.fromarray(cv2.cvtColor(restored_bgr, cv2.COLOR_BGR2RGB))
     else:
         img_bgr = cv2.cvtColor(np.array(input_image), cv2.COLOR_RGB2BGR)
         output_bgr = upscaler.enhance(img_bgr, progress_queue=progress_bar_queue)

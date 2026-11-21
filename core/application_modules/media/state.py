@@ -2,6 +2,7 @@
 
 from core.services.upscalers.constants import AMD_VIDEO_SR_MODEL
 from core.application_modules.media.media_state import create_media_entry
+from core.models.model_info import describe_model
 from pathlib import Path
 
 
@@ -182,6 +183,13 @@ class MediaStateManager:
                 state["image_name"] = entry["name"]
                 if previous_revision != self._preview_delivery_revision:
                     state["image"] = self._preview_url
+            labels = set(state["models"])
+            if state["video"]:
+                for option in state["video"]["realtime_options"]:
+                    labels.update(option["models"])
+            state["model_info"] = {
+                label: info for label in labels if (info := describe_model(label))
+            }
             self._message = None
             return state
 
