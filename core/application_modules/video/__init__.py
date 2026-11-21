@@ -1,11 +1,13 @@
 import cv2
 import io
+import time
 from pathlib import Path
 
 from PIL import Image
 
 from core.services.app_logging import log_event
-from core.services.realtime_video import AMD_VIDEO_SR_MODEL, RealTimeVideoProcessor
+from core.services.upscalers.constants import AMD_VIDEO_SR_MODEL
+from core.services.realtime_video import RealTimeVideoProcessor
 
 
 class VideoModule:
@@ -162,14 +164,22 @@ class VideoModule:
         return position
 
     def set_video_realtime_paused(self, paused):
+        requested_at = time.monotonic()
         with self._lock:
+            lock_acquired_at = time.monotonic()
             entry = self._current()
             processor = entry["realtime_processor"] if entry and entry["kind"] == "video" else None
             if not processor or not processor.running:
                 return False
             processor.set_paused(bool(paused))
             self._touch()
-        log_event("realtime_pause_changed", paused=bool(paused))
+        completed_at = time.monotonic()
+        log_event(
+            "realtime_pause_changed",
+            paused=bool(paused),
+            lock_wait_ms=round((lock_acquired_at - requested_at) * 1000, 1),
+            handler_ms=round((completed_at - lock_acquired_at) * 1000, 1),
+        )
         return True
 
     @staticmethod

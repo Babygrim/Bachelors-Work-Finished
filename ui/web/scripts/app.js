@@ -73,6 +73,7 @@ let jobPollInFlight = false;
 let shownRealtimeError = '';
 const realtimeMse = new RealtimeMsePreview(realtimePlayer, (error) => {
   setToast(`Real-time H.264 preview failed: ${error.message}`, 'error');
+  if (realtimeMse.failed) $('#realtime-loading').hidden = true;
 }, () => {
   if (state?.video?.realtime_running) applyPreview(state);
 });
@@ -221,13 +222,62 @@ function syncJobOverlay(job) {
   $('#cancel-job').hidden = exporting || !job.running;
   $('#cancel-job').disabled = job.status === 'Cancelling';
   $('#cancel-job').textContent = job.status === 'Cancelling' ? 'Cancelling…' : 'Cancel';
-  $('#job-detail').textContent = exporting
-    ? `Writing ${state?.kind === 'video' ? 'video' : 'image'}`
-    : job.kind === 'video_export'
-      ? `${job.current || 0}/${job.total || 0} frames · ${Number(job.fps || 0).toFixed(2)} FPS · ${formatDuration(job.duration)}`
-      : job.total
-        ? `${String(job.stage || 'processing').replaceAll('-', ' ')} · ${job.current}/${job.total} ${job.unit || 'items'}${job.total === 1 ? '' : 's'}`
-        : 'Preparing image';
+  
+  // Build job detail text with time estimation
+  let jobDetail = '';
+  
+  if (exporting) {
+    jobDetail = `Writing ${state?.kind === 'video' ? 'video' : 'image'}`;
+  } else if (job.kind === 'video_upscale') {
+    // Video upscaling with time estimation
+    const framesInfo = `${job.current || 0}/${job.total || 0} frames`;
+    const fpsInfo = `${Number(job.processing_fps || 0).toFixed(2)} fps`;
+    const timeEstimateFormatted = job.time_estimate_formatted || '';
+    const timeRemainingFormatted = job.time_remaining_formatted || '';
+    
+    // Show: frames · fps · time remaining / total estimated
+    if (timeRemainingFormatted && timeEstimateFormatted) {
+      jobDetail = `${framesInfo} · ${fpsInfo} · ${timeRemainingFormatted} / ${timeEstimateFormatted}`;
+    } else if (timeEstimateFormatted) {
+      jobDetail = `${framesInfo} · ${fpsInfo} · Est. ${timeEstimateFormatted}`;
+    } else {
+      jobDetail = `${framesInfo} · ${fpsInfo} · ${formatDuration(job.duration)}`;
+    }
+  } else if (job.kind === 'video_export') {
+    jobDetail = `${job.current || 0}/${job.total || 0} frames · ${Number(job.fps || 0).toFixed(2)} FPS · ${formatDuration(job.duration)}`;
+  } else if (job.kind === 'image_upscale') {
+    // Image upscaling with time estimation
+    const timeEstimateFormatted = job.time_estimate_formatted || '';
+    const timeRemainingFormatted = job.time_remaining_formatted || '';
+    const fpsInfo = `${Number(job.processing_fps || 0).toFixed(2)} fps`;
+    
+    // Show: processing info · fps · time remaining / total estimated
+    if (timeRemainingFormatted && timeEstimateFormatted) {
+      jobDetail = `${String(job.stage || 'processing').replaceAll('-', ' ')} · ${fpsInfo} · ${timeRemainingFormatted} / ${timeEstimateFormatted}`;
+    } else if (timeEstimateFormatted) {
+      jobDetail = `${String(job.stage || 'processing').replaceAll('-', ' ')} · ${fpsInfo} · Est. ${timeEstimateFormatted}`;
+    } else if (job.total) {
+      jobDetail = `${String(job.stage || 'processing').replaceAll('-', ' ')} · ${job.current}/${job.total} ${job.unit || 'items'}${job.total === 1 ? '' : 's'}`;
+    } else {
+      jobDetail = 'Preparing image';
+    }
+  } else if (job.total) {
+    // Generic upscaling/processing job
+    const timeEstimateFormatted = job.time_estimate_formatted || '';
+    const timeRemainingFormatted = job.time_remaining_formatted || '';
+    
+    if (timeRemainingFormatted && timeEstimateFormatted) {
+      jobDetail = `${String(job.stage || 'processing').replaceAll('-', ' ')} · ${job.current}/${job.total} ${job.unit || 'items'} · ${timeRemainingFormatted} / ${timeEstimateFormatted}`;
+    } else if (timeEstimateFormatted) {
+      jobDetail = `${String(job.stage || 'processing').replaceAll('-', ' ')} · ${job.current}/${job.total} ${job.unit || 'items'} · Est. ${timeEstimateFormatted}`;
+    } else {
+      jobDetail = `${String(job.stage || 'processing').replaceAll('-', ' ')} · ${job.current}/${job.total} ${job.unit || 'items'}${job.total === 1 ? '' : 's'}`;
+    }
+  } else {
+    jobDetail = 'Preparing image';
+  }
+  
+  $('#job-detail').textContent = jobDetail;
 }
 
 function formatDuration(seconds) {
@@ -387,13 +437,13 @@ function applyPreview(next) {
     target.style.transform = 'translate(-50%, -50%)';
     const waitingForPreview = realtime && (
       mseRealtime
-        ? !realtimeMse.hasFirstFrame
+        ? !realtimeMse.ready && !realtimeMse.failed
         : next.video.realtime_loading
     );
     $('#realtime-loading').hidden = !waitingForPreview;
     if (waitingForPreview) {
       const stage = mseRealtime && !next.video.realtime_loading
-        ? 'Waiting for decoded preview frame'
+        ? 'Waiting for preview buffer'
         : next.video.realtime_stage || 'Preparing real-time preview';
       const stageNumber = {
         'Opening video': 1,
@@ -402,7 +452,9 @@ function applyPreview(next) {
         'Upscaling first frame': 3,
         'Preparing first preview frame': 4,
         'Preparing H.264 preview': 4,
-        'Waiting for decoded preview frame': 5,
+        'Waiting for H.264 encoder output': 4,
+        'Buffering preview': 4,
+        'Waiting for preview buffer': 5,
         'Seeking to frame': 1,
         'Restarting H.264 preview': 4,
       }[stage] || 1;

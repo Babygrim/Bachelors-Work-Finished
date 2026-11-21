@@ -7,26 +7,12 @@ import numpy as np
 import onnxruntime as ort
 import torch
 
-from core.config.constants import ROOT_DIR
+from core.models.checkpoints import load_torch_model
 from core.progress import report_progress
 
 def _export_to_onnx(pth_path, onnx_path, scale, num_block=23, fp16=False):
-    """Export a RRDBNet .pth checkpoint to ONNX format (run once per model)."""
-    from core.models.rrdbnet_arch import RRDBNet
-
-    model = RRDBNet(
-        num_in_ch=3, num_out_ch=3, num_feat=64,
-        num_block=num_block, num_grow_ch=32, scale=scale,
-    )
-
-    loadnet = torch.load(pth_path, map_location='cpu', weights_only=True)
-    if 'params_ema' in loadnet:
-        model.load_state_dict(loadnet['params_ema'], strict=True)
-    elif 'params' in loadnet:
-        model.load_state_dict(loadnet['params'], strict=True)
-    else:
-        model.load_state_dict(loadnet, strict=True)
-    model.eval()
+    """Export a RRDBNet or SRVGGNetCompact .pth checkpoint to ONNX (run once per model)."""
+    model = load_torch_model(pth_path, scale, num_block)
 
     dtype = torch.float16 if fp16 else torch.float32
     if fp16:
@@ -64,6 +50,12 @@ def _export_both(pth_path, scale, num_block=23):
 class OnnxRealESRGANer:
     """RealESRGAN inference via ONNX Runtime + DirectML execution provider.
 
+    Optimizations:
+    - IOBinding with reusable buffers for interior tiles (reduces data copying)
+    - Prefetch scheduling: CPU slices next tile while GPU processes current tile
+    - Fixed tile shape (edge tiles padded) so DirectML never re-plans the graph
+    - Increased ONNX Runtime thread pools for better parallelization
+
     On first use both FP32 and FP16 ONNX files are exported from the .pth
     checkpoint and cached next to it. FP16 is used automatically when available
     (~1.5-2x faster on AMD GPUs); FP32 is the fallback.
@@ -74,16 +66,17 @@ class OnnxRealESRGANer:
         tile (int): Tile size used during inference.
         tile_pad (int): Overlap padding between tiles.
         num_block (int): Number of RRDB blocks (23 standard, 6 anime).
+        num_threads (int): Number of threads for ONNX Runtime parallelization.
     """
 
-    def __init__(self, scale, pth_path, tile=768, tile_pad=0, num_block=23):
+    def __init__(self, scale, pth_path, tile=768, tile_pad=0, num_block=23, num_threads=2):
         self.scale = scale
         self.tile_size = tile
         self.tile_pad = tile_pad
+        self.num_threads = max(1, int(num_threads))
 
         base = os.path.splitext(pth_path)[0]
         fp_path = base + '.onnx'
-
 
         # Export any missing precision (fp32 and/or fp16) from the .pth checkpoint
         if not os.path.exists(fp_path):
@@ -101,6 +94,15 @@ class OnnxRealESRGANer:
         sess_opts = ort.SessionOptions()
         sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         sess_opts.enable_cpu_mem_arena = False
+        # Increase thread pools for better parallelization within ONNX
+        sess_opts.inter_op_num_threads = max(2, self.num_threads)
+        sess_opts.intra_op_num_threads = max(2, self.num_threads)
+
+        # Fixed input size: DirectML re-plans the graph on every shape change and
+        # runs ~3x slower with dynamic shapes. All tiles are padded to this size.
+        self.io_size = tile + 2 * tile_pad
+        sess_opts.add_free_dimension_override_by_name('height', self.io_size)
+        sess_opts.add_free_dimension_override_by_name('width', self.io_size)
 
         providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
         self.session = ort.InferenceSession(onnx_path, sess_options=sess_opts, providers=providers)
@@ -109,14 +111,17 @@ class OnnxRealESRGANer:
         self.output_name = self.session.get_outputs()[0].name
 
         label = 'fp16' if self.np_dtype == np.float16 else 'fp32'
-        print(f"ORT provider: {self.session.get_providers()[0]} | precision: {label}")
+        print(f"ORT provider: {self.session.get_providers()[0]} | precision: {label} | threads: {self.num_threads}")
 
         # Warmup: compile DirectML shaders so the first real tile isn't slow.
-        warmup = np.zeros((1, 3, 64, 64), dtype=self.np_dtype)
+        warmup = np.zeros((1, 3, self.io_size, self.io_size), dtype=self.np_dtype)
         self.session.run([self.output_name], {self.input_name: warmup})
 
     def enhance(self, img_bgr, progress_queue=None, outscale=None):
         """Upscale a BGR uint8 image using tiled ONNX inference.
+
+        Every tile is padded to the session's fixed input size and the padding is
+        cropped from the output, so DirectML always sees the same tensor shape.
 
         Args:
             img_bgr: HWC uint8 numpy array in BGR colour order.
@@ -138,16 +143,14 @@ class OnnxRealESRGANer:
         out_H, out_W = H * scale, W * scale
         output = np.zeros((C, out_H, out_W), dtype=np.float32)
 
-        io_pad_h = tile + 2 * pad
-        io_pad_w = tile + 2 * pad
+        io_size = self.io_size
 
-        # IOBinding: fixed-size buffers for the standard (non-edge) tile.
-        # Edge tiles may be smaller and fall back to session.run().
+        # IOBinding: reusable fixed-size buffers for every tile.
         binding = _buf_in = _buf_out = None
         try:
             binding = self.session.io_binding()
-            _buf_in  = np.zeros((1, C, io_pad_h, io_pad_w), dtype=self.np_dtype)
-            _buf_out = np.zeros((1, C, io_pad_h * scale, io_pad_w * scale), dtype=self.np_dtype)
+            _buf_in  = np.zeros((1, C, io_size, io_size), dtype=self.np_dtype)
+            _buf_out = np.zeros((1, C, io_size * scale, io_size * scale), dtype=self.np_dtype)
             binding.bind_cpu_input(self.input_name, _buf_in)
             binding.bind_cpu_output(self.output_name, _buf_out)
         except Exception:
@@ -168,14 +171,23 @@ class OnnxRealESRGANer:
                 x1p, y1p = min(x1 + pad, W), min(y1 + pad, H)
                 tile_metas.append((x0, y0, x1, y1, x0p, y0p, x1p, y1p))
 
-        # Prefetch: slice the next tile's numpy data on CPU while the GPU runs the current tile.
+        # Prefetch: slice and pad the next tile on CPU while the GPU runs the current one.
         prefetch_result = [None]
 
-        def _prefetch(x0p, y0p, x1p, y1p):
-            prefetch_result[0] = np.ascontiguousarray(img_chw[:, y0p:y1p, x0p:x1p])[np.newaxis]
+        def _prefetch(meta):
+            _, _, _, _, x0p, y0p, x1p, y1p = meta
+            tile_np = img_chw[:, y0p:y1p, x0p:x1p]
+            pad_h = io_size - (y1p - y0p)
+            pad_w = io_size - (x1p - x0p)
+            if pad_h or pad_w:
+                tile_np = np.pad(tile_np, ((0, 0), (0, pad_h), (0, pad_w)), mode="edge")
+            prefetch_result[0] = np.ascontiguousarray(tile_np)[np.newaxis]
 
-        x0, y0, x1, y1, x0p, y0p, x1p, y1p = tile_metas[0]
-        prefetch_thread = threading.Thread(target=_prefetch, args=(x0p, y0p, x1p, y1p), daemon=True)
+        prefetch_thread = threading.Thread(
+            target=_prefetch,
+            args=(tile_metas[0],),
+            daemon=True,
+        )
         prefetch_thread.start()
 
         for idx, (x0, y0, x1, y1, x0p, y0p, x1p, y1p) in enumerate(tile_metas):
@@ -183,23 +195,21 @@ class OnnxRealESRGANer:
             tile_in = prefetch_result[0]
             assert tile_in is not None
 
-            ph, pw = y1p - y0p, x1p - x0p
-            is_interior = (ph == io_pad_h and pw == io_pad_w)
-
-            if idx + 1 < total:
-                nx0, ny0, nx1, ny1, nx0p, ny0p, nx1p, ny1p = tile_metas[idx + 1]
+            if idx + 1 < len(tile_metas):
                 prefetch_thread = threading.Thread(
-                    target=_prefetch, args=(nx0p, ny0p, nx1p, ny1p), daemon=True
+                    target=_prefetch,
+                    args=(tile_metas[idx + 1],),
+                    daemon=True,
                 )
                 prefetch_thread.start()
 
-            if binding is not None and is_interior:
+            if binding is not None:
                 assert _buf_in is not None and _buf_out is not None
-                _buf_in[0] = tile_in[0]
+                _buf_in[:] = tile_in
                 self.session.run_with_iobinding(binding)
                 tile_out = _buf_out[0]
             else:
-                tile_out = self.session.run([self.output_name], {self.input_name: tile_in})[0][0]  # ty: ignore[not-subscriptable]
+                tile_out = self.session.run([self.output_name], {self.input_name: tile_in})[0][0]
 
             ox0, oy0 = x0 * scale, y0 * scale
             ox1, oy1 = x1 * scale, y1 * scale

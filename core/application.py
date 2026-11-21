@@ -1,26 +1,19 @@
-import base64
-import io
-import re
 import threading
-from pathlib import Path
 
 import webview
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image
 
-from core.config.constants import ROOT_DIR
-from core.processing import effects as img_effects
-from core.models.weights import models_for_factor
-from core.services.realtime_video import AMD_VIDEO_SR_MODEL
 from core.services.video_stream import VideoStreamServer
 from core.application_modules.media import MediaModule
 from core.application_modules.shared import SLIDER_DEFAULTS
 from core.application_modules.video import VideoModule
 from core.application_modules.operations import OperationsModule
+from core.managers import ModelManager, EffectsManager
 
 _native_window = None
 
 
-class WebApp(MediaModule, VideoModule, OperationsModule):
+class WebApp(MediaModule, VideoModule, OperationsModule, ModelManager, EffectsManager):
     def __init__(self):
         self._lock = threading.RLock()
         self._entries = []
@@ -52,6 +45,7 @@ class WebApp(MediaModule, VideoModule, OperationsModule):
         self._job_thread = None
         self._cancel_event = None
         self._process = None
+        OperationsModule.__init__(self)
 
     def _bind_window(self, window):
         global _native_window
@@ -65,7 +59,7 @@ class WebApp(MediaModule, VideoModule, OperationsModule):
         return next((item for item in self._entries if item["id"] == self._current_id), None)
 
     def _default_settings(self):
-        models = self._models_for_factor(2)
+        models = self.models_for_factor(2)
         return {
             "effects": {**SLIDER_DEFAULTS, "Inversion": False},
             "enhancement": {
@@ -76,128 +70,35 @@ class WebApp(MediaModule, VideoModule, OperationsModule):
             },
         }
 
-    @staticmethod
-    def _models_for_factor(factor):
-        return models_for_factor(factor)
+    def _models_for_factor(self, factor):
+        return self.models_for_factor(factor)
 
-    @staticmethod
-    def _realtime_model_factors():
-        realtime_weights = Path(ROOT_DIR, "weights", "realtime")
-        factors = set()
-        if realtime_weights.is_dir():
-            for path in realtime_weights.iterdir():
-                match = re.search(r"_x(2|4|8)\.(?:pb|onnx)$", path.name, re.IGNORECASE)
-                if match:
-                    factors.add(int(match.group(1)))
-        if MediaModule._ffmpeg_path():
-            factors.update((2, 4))
-        return factors
+    def _realtime_model_factors(self):
+        return self.realtime_model_factors()
 
-    @staticmethod
-    def _realtime_models():
-        realtime_weights = Path(ROOT_DIR, "weights", "realtime")
-        models = set()
-        if realtime_weights.is_dir():
-            models.update(
-                path.stem
-                for path in realtime_weights.iterdir()
-                if path.suffix.lower() in (".pb", ".onnx")
-            )
-        if MediaModule._ffmpeg_path():
-            models.add(AMD_VIDEO_SR_MODEL)
-        return sorted(models)
+    def _realtime_models(self):
+        return self.realtime_models()
 
-    @classmethod
-    def _realtime_models_for_factor(cls, factor):
-        factor = int(factor)
-        models = []
-        for model in cls._realtime_models():
-            if model == AMD_VIDEO_SR_MODEL:
-                if factor in (2, 4):
-                    models.append(model)
-                continue
-            match = re.search(r"_x(2|4|8)$", model, re.IGNORECASE)
-            if match and int(match.group(1)) == factor:
-                models.append(model)
-        return models
+    def _realtime_models_for_factor(self, factor):
+        return self.realtime_models_for_factor(factor)
 
-    @classmethod
-    def _realtime_output_options(cls, entry):
-        source_width, source_height = entry["original_size"]
-        options = []
-        for factor in (2, 4, 8):
-            models = cls._realtime_models_for_factor(factor)
-            if not models:
-                continue
-            options.append({
-                "factor": factor,
-                "width": source_width * factor,
-                "height": source_height * factor,
-                "label": f"{source_width * factor} × {source_height * factor}",
-                "models": models,
-            })
-        return options
+    def _realtime_output_options(self, entry):
+        return self.realtime_output_options(entry)
 
-    @classmethod
-    def _video_models_for_factor(cls, factor):
-        models = cls._models_for_factor(factor)
-        if models:
-            return models
-        if int(factor) in cls._realtime_model_factors():
-            return ["CPU resize and sharpen"]
-        return []
+    def _video_models_for_factor(self, factor, entry=None):
+        return self.video_models_for_factor(factor, entry)
 
-    @classmethod
-    def _video_output_options(cls, entry):
-        source_width, source_height = entry["original_size"]
-        factors = [
-            factor for factor in (2, 4, 8)
-            if cls._models_for_factor(factor) or factor in cls._realtime_model_factors()
-        ]
-        if not factors:
-            factors = [1]
-        return [
-            {
-                "factor": factor,
-                "width": source_width * factor,
-                "height": source_height * factor,
-                "label": f"{source_width * factor} × {source_height * factor}",
-            }
-            for factor in factors
-        ]
+    def _video_output_options(self, entry):
+        return self.video_output_options(entry)
 
     def _apply_effects(self, image, settings):
-        settings = settings["effects"]
-        result = image.copy()
-        for name, function in (
-            ("Brightness", ImageEnhance.Brightness),
-            ("Color", ImageEnhance.Color),
-            ("Contrast", ImageEnhance.Contrast),
-            ("Sharpness", ImageEnhance.Sharpness),
-        ):
-            result = function(result).enhance(float(settings[name]) / 100)
-        blur = float(settings["Blur"]) / 100
-        if blur:
-            result = result.filter(ImageFilter.GaussianBlur(blur))
-        if settings["Inversion"]:
-            result = img_effects.invert_image_colors(result, None)
-        return result
+        return self.apply_effects(image, settings)
 
-    @staticmethod
-    def _image_url(image):
-        buffer = io.BytesIO()
-        image.save(buffer, format="WEBP", quality=92, method=4)
-        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return f"data:image/webp;base64,{encoded}"
+    def _image_url(self, image):
+        return self.image_to_url(image)
 
-    @staticmethod
-    def _video_preview_url(image):
-        preview = image.copy()
-        preview.thumbnail((960, 720), Image.Resampling.BILINEAR)
-        buffer = io.BytesIO()
-        preview.save(buffer, format="WEBP", quality=72, method=0)
-        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return f"data:image/webp;base64,{encoded}"
+    def _video_preview_url(self, image):
+        return self.video_preview_url(image)
 
     def _touch(self, preview=False, immediate=False):
         self._revision += 1

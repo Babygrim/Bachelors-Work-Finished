@@ -1,11 +1,3 @@
-from math import ceil
+"""Re-export for backward compatibility."""
 
-from PIL import Image
-
-
-def resize_image(photo_image, new_height, new_width):
-    resized = photo_image.resize(
-        (ceil(new_width), ceil(new_height)),
-        Image.Resampling.BICUBIC,
-    )
-    return resized, 1.0
+from core.processing.upscaling.resize import *  # noqa
