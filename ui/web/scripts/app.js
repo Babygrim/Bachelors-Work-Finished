@@ -11,6 +11,7 @@ let bindEnhanceControls = () => {};
 let syncEnhanceControls = () => {};
 let bindCanvasControls = () => {};
 let bindVideoControls = () => {};
+let syncTrimTimeline = () => {};
 const unavailableFeatures = new Set();
 
 async function loadFeatureModules() {
@@ -31,7 +32,7 @@ async function loadFeatureModules() {
       } else if (name === 'canvas') {
         ({ bindCanvasControls } = loaded);
       } else {
-        ({ bindVideoControls } = loaded);
+        ({ bindVideoControls, syncTrimTimeline } = loaded);
       }
       status[name] = true;
     } catch (error) {
@@ -48,7 +49,7 @@ function disableUnavailableFeature(name) {
     adjust: '#effects-controls input, #inversion, #denoise-button',
     enhance: '#enhance-controls input, #enhance-controls select, #upscale-button, #factor-options button',
     canvas: '#crop-button, #reset-scale-button, #fit-button, #scale-slider',
-    video: '#video-toolbar button, #video-toolbar input, #video-toolbar select, #video-tools-bottom button, #video-tools-bottom input, #video-tools-bottom select, #video-controls button, #video-controls select',
+    video: '#video-toolbar button, #video-toolbar input, #video-toolbar select, #video-tools-bottom button, #video-tools-bottom input, #video-tools-bottom select, #video-controls button, #video-controls select, #trim-toolbar button',
   };
   document.querySelectorAll(selectors[name]).forEach((control) => {
     control.disabled = true;
@@ -149,7 +150,7 @@ async function pauseCurrentVideoForHistoryChange() {
 function setBusy(busy) {
   const imageUnavailable = !state?.has_image;
   const blocked = busy || imageLoading || resultPreviewId || effectBlocking || state?.image_loading;
-  document.querySelectorAll('.controls input, .controls select, .controls button, .video-toolbar input, .video-toolbar button, .video-tools-bottom input, .video-tools-bottom button, .history-item, #remove-button, #open-button, #empty-open-button, #export-button, #crop-button, #reset-scale-button, #fit-button, #reset-module')
+  document.querySelectorAll('.controls input, .controls select, .controls button, .video-toolbar input, .video-toolbar button, .video-tools-bottom input, .video-tools-bottom button, .trim-toolbar button, .history-item, #remove-button, #open-button, #empty-open-button, #export-button, #crop-button, #reset-scale-button, #fit-button, #reset-module')
     .forEach((control) => {
       const importAction = control.id === 'open-button' || control.id === 'empty-open-button';
       control.disabled = blocked || (imageUnavailable && !importAction);
@@ -608,6 +609,7 @@ function syncControls(next) {
   inspectorTabs.sync(next);
   $('#image-toolbar').hidden = isVideo;
   $('#video-toolbar').hidden = !isVideo;
+  $('#trim-toolbar').hidden = !isVideo;
   $('#video-tools-bottom').hidden = !isVideo;
   $('#inspector-title').textContent = isVideo ? 'Video' : 'Image';
   $('#inspector-kicker').textContent = isVideo ? 'VIDEO TOOLS' : 'IMAGE TOOLS';
@@ -646,6 +648,7 @@ function syncControls(next) {
       : next.settings.enhancement.model;
     renderModelInfo($('#video-model-info'), next.model_info?.[videoModel.value]);
     syncVideoTimeline();
+    syncTrimTimeline(next);
     const videoScale = pendingScale?.entryId === next.current_id ? pendingScale.value : next.scale || 1;
     if (document.activeElement !== $('#video-zoom')) {
       $('#video-zoom').value = Math.round(videoScale * 100);

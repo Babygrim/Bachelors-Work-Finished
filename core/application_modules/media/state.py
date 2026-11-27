@@ -111,6 +111,8 @@ class MediaStateManager:
                     "position": entry["video_position"],
                     "duration": entry["video_frame_count"] / entry["video_fps"]
                     if entry["video_fps"] > 0 else 0,
+                    "trim_start": entry["video_trim_start"],
+                    "trim_end": entry["video_trim_end"],
                     "realtime_url": entry["realtime_url"],
                     "realtime_factor": entry["realtime_factor"],
                     "realtime_model": entry["realtime_model"],

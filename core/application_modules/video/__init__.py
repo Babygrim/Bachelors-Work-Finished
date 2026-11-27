@@ -41,6 +41,48 @@ class VideoModule:
             log_event("realtime_seek_requested", position=entry["video_position"])
         return True
 
+    def set_video_trim(self, start, end):
+        """Mark an in/out range (seconds) so only that fragment gets upscaled."""
+        with self._lock:
+            entry = self._current()
+            if not entry or entry["kind"] != "video" or self._job["running"]:
+                return False
+            duration = (
+                entry["video_frame_count"] / entry["video_fps"]
+                if entry["video_fps"] > 0 else 0
+            )
+            if duration <= 0:
+                return False
+            try:
+                start = float(start)
+                end = float(end)
+            except (TypeError, ValueError):
+                return False
+            start = max(0.0, min(start, duration))
+            end = max(0.0, min(end, duration))
+            min_span = 1.0 / entry["video_fps"] if entry["video_fps"] > 0 else 0.1
+            if end - start < min_span:
+                return False
+            entry["video_trim_start"] = start
+            entry["video_trim_end"] = end
+            self._touch()
+        log_event("video_trim_set", start=round(start, 3), end=round(end, 3))
+        return True
+
+    def clear_video_trim(self):
+        """Drop the in/out range so upscaling runs on the full video again."""
+        with self._lock:
+            entry = self._current()
+            if not entry or entry["kind"] != "video":
+                return False
+            if entry["video_trim_start"] is None and entry["video_trim_end"] is None:
+                return False
+            entry["video_trim_start"] = None
+            entry["video_trim_end"] = None
+            self._touch()
+        log_event("video_trim_cleared")
+        return True
+
     def set_video_realtime_options(self, factor, mode):
         with self._lock:
             entry = self._current()

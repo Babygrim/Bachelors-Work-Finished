@@ -40,6 +40,10 @@ class MediaIOManager:
         """Start video upscaling process."""
         return media_exporter.start_video_upscale_process(self)
 
+    def cut_video_clip(self):
+        """Cut the current trim range out of the source video into history."""
+        return media_exporter.start_video_clip_export(self)
+
     def _export_video_worker(self, source_path, output_path, cancel_event):
         """Export video worker."""
         return media_exporter.export_video_worker(self, source_path, output_path, cancel_event)

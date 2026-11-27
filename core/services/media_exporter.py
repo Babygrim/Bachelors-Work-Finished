@@ -188,6 +188,24 @@ def start_video_upscale_process(media_module):
                 "No upscaling model is available for the selected resolution.",
             )
             return False
+
+        # A trimmed in/out range lets the user test a model on a short fragment
+        # before committing to the full video.
+        trim_start = entry.get("video_trim_start")
+        trim_end = entry.get("video_trim_end")
+        trim = (
+            (trim_start, trim_end)
+            if trim_start is not None and trim_end is not None and trim_end > trim_start
+            else None
+        )
+        fps = entry["video_fps"]
+        if trim and fps > 0:
+            effective_frame_count = min(
+                entry["video_frame_count"],
+                max(0, round((trim[1] - trim[0]) * fps)),
+            )
+        else:
+            effective_frame_count = entry["video_frame_count"]
         
         output_path = Path(tempfile.gettempdir()) / (
             f"picture-editor-{uuid.uuid4().hex}.mp4"
@@ -211,7 +229,7 @@ def start_video_upscale_process(media_module):
         # Estimate processing time
         estimator = UpscalingTimeEstimator()
         time_estimate = estimator.estimate_time(
-            total_frames=entry["video_frame_count"],
+            total_frames=effective_frame_count,
             fps=entry["video_fps"],
             input_resolution=(entry.get("video_width", 1920), entry.get("video_height", 1080)),
             scale=options["factor"],
@@ -222,15 +240,15 @@ def start_video_upscale_process(media_module):
         media_module._job = {
             "running": True,
             "progress": 0,
-            "status": "Upscaling video",
+            "status": "Upscaling test clip" if trim else "Upscaling video",
             "stage": "frames",
             "current": 0,
-            "total": entry["video_frame_count"],
+            "total": effective_frame_count,
             "unit": "frame",
             "kind": "video_upscale",
             "fps": entry["video_fps"],
             "duration": (
-                entry["video_frame_count"] / entry["video_fps"]
+                effective_frame_count / entry["video_fps"]
                 if entry["video_fps"] > 0 else 0
             ),
             "error": None,
@@ -247,6 +265,7 @@ def start_video_upscale_process(media_module):
     media_module._job_thread = threading.Thread(
         target=upscale_video_worker,
         args=(media_module, source_path, output_path, options, media_module._cancel_event),
+        kwargs={"trim": trim},
         daemon=True,
     )
     log_event(
@@ -254,6 +273,8 @@ def start_video_upscale_process(media_module):
         model=options["model"],
         factor=options["factor"],
         output=output_path.name,
+        trim_start=trim[0] if trim else None,
+        trim_end=trim[1] if trim else None,
     )
     media_module._job_thread.start()
     
@@ -310,7 +331,216 @@ def export_video_worker(media_module, source_path, output_path, cancel_event):
             media_module._cancel_event = None
 
 
-def upscale_video_worker(media_module, source_path, output_path, options, cancel_event):
+def start_video_clip_export(media_module):
+    """
+    Cut the current trim (in/out) range out of the source video and add the
+    result to history, without upscaling it. Lets a fragment be pulled out
+    for later use (e.g. sharing or re-importing) without running a model.
+
+    Args:
+        media_module: MediaModule instance
+
+    Returns:
+        bool: True if the cut started, False otherwise
+    """
+    with media_module._lock:
+        entry = media_module._current()
+        if (
+            not entry
+            or entry["kind"] != "video"
+            or media_module._job["running"]
+            or (media_module._job_thread and media_module._job_thread.is_alive())
+        ):
+            return False
+
+        trim_start = entry.get("video_trim_start")
+        trim_end = entry.get("video_trim_end")
+        if trim_start is None or trim_end is None or trim_end <= trim_start:
+            media_module._set_message(
+                "error", "Mark a start and end point before cutting a clip."
+            )
+            return False
+
+        source_path = Path(entry["video_path"])
+        if not source_path.is_file():
+            media_module._set_message("error", f"Video source not found: {source_path}")
+            return False
+
+        ffmpeg = find_ffmpeg_path()
+        if ffmpeg is None:
+            media_module._set_message(
+                "error",
+                "FFmpeg is required to cut a clip. Install FFmpeg and add it to PATH.",
+            )
+            log_event("video_clip_rejected", reason="ffmpeg_not_found")
+            return False
+
+        output_path = Path(tempfile.gettempdir()) / (
+            f"picture-editor-clip-{uuid.uuid4().hex}.mp4"
+        )
+
+        media_module._job = {
+            "running": True,
+            "progress": 0,
+            "status": "Cutting clip",
+            "stage": "export",
+            "current": 0,
+            "total": 0,
+            "unit": "",
+            "kind": "export",
+            "error": None,
+        }
+        media_module._cancel_event = threading.Event()
+        media_module._touch()
+
+    media_module._job_thread = threading.Thread(
+        target=export_video_clip_worker,
+        args=(media_module, source_path, output_path, (trim_start, trim_end), media_module._cancel_event),
+        daemon=True,
+    )
+    log_event(
+        "video_clip_requested",
+        trim_start=round(trim_start, 3),
+        trim_end=round(trim_end, 3),
+        output=output_path.name,
+    )
+    media_module._job_thread.start()
+
+    return True
+
+
+def export_video_clip_worker(media_module, source_path, output_path, trim, cancel_event):
+    """
+    Worker thread that cuts [start, end] out of source_path into output_path
+    with FFmpeg (video + audio, re-encoded for an accurate cut) and adds the
+    result to history as a new video entry.
+
+    Args:
+        media_module: MediaModule instance
+        source_path: Source video path
+        output_path: Output clip path
+        trim: (start_seconds, end_seconds) range to cut
+        cancel_event: Event to signal cancellation (checked before starting)
+    """
+    start, end = trim
+    duration = max(0.0, end - start)
+    try:
+        if cancel_event.is_set():
+            return
+
+        ffmpeg = find_ffmpeg_path()
+        if ffmpeg is None:
+            raise RuntimeError("FFmpeg became unavailable while cutting the clip.")
+
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-ss",
+                f"{start:.3f}",
+                "-i",
+                str(source_path),
+                "-t",
+                f"{duration:.3f}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "18",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception as error:
+        log_event(
+            "video_clip_failed",
+            error=str(error),
+            trim_start=round(start, 3),
+            trim_end=round(end, 3),
+        )
+        try:
+            Path(output_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        with media_module._lock:
+            media_module._job = {
+                "running": False,
+                "progress": 0,
+                "status": "Failed",
+                "kind": "export",
+                "error": str(error),
+            }
+            media_module._message = {"type": "error", "text": f"Could not cut clip: {error}"}
+            media_module._touch()
+    else:
+        if cancel_event.is_set():
+            Path(output_path).unlink(missing_ok=True)
+            with media_module._lock:
+                media_module._job = {
+                    "running": False,
+                    "progress": 0,
+                    "status": "Cancelled",
+                    "kind": "export",
+                    "error": None,
+                }
+                media_module._touch()
+            return
+
+        log_event(
+            "video_clip_completed",
+            trim_start=round(start, 3),
+            trim_end=round(end, 3),
+            duration=round(duration, 2),
+        )
+        try:
+            from core.services.media_loader import create_video_entry_from_path
+
+            with media_module._lock:
+                create_video_entry_from_path(
+                    media_module,
+                    output_path,
+                    temporary_path=output_path,
+                    name=f"{Path(source_path).stem}_cut_{int(start)}s-{int(end)}s",
+                )
+                media_module._job = {
+                    "running": False,
+                    "progress": 100,
+                    "status": "Complete",
+                    "kind": "export",
+                    "error": None,
+                }
+                media_module._message = {
+                    "type": "success",
+                    "text": "Clip added to history.",
+                }
+                media_module._touch()
+        except Exception as error:
+            with media_module._lock:
+                media_module._job = {
+                    "running": False,
+                    "progress": 0,
+                    "status": "Failed",
+                    "kind": "export",
+                    "error": str(error),
+                }
+                media_module._message = {"type": "error", "text": str(error)}
+                media_module._touch()
+    finally:
+        with media_module._lock:
+            media_module._cancel_event = None
+
+
+def upscale_video_worker(media_module, source_path, output_path, options, cancel_event, trim=None):
     """
     Worker thread for video upscaling.
     
@@ -320,6 +550,9 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
         output_path: Output video path
         options: Upscaling options (factor, model, keep_size)
         cancel_event: Event to signal cancellation
+        trim: Optional (start_seconds, end_seconds) range; only that fragment is
+            upscaled and the remuxed audio is cut to match, for quickly testing a
+            model/factor before running the full video.
     """
     capture = cv2.VideoCapture(str(source_path))
     writer = None
@@ -339,6 +572,8 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
             "device": processing_device,
             "frames_processed": frame_index,
             "frames_total": total,
+            "trim_start": trim[0] if trim else None,
+            "trim_end": trim[1] if trim else None,
             "total_seconds": round(elapsed, 2),
             "processing_seconds": round(time.monotonic() - processing_started, 2),
             **extra,
@@ -350,6 +585,13 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
         
         fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
         total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        start_frame = 0
+        if trim:
+            start_frame = max(0, min(total, int(round(trim[0] * fps))))
+            end_frame = max(start_frame, min(total, int(round(trim[1] * fps))))
+            total = end_frame - start_frame
+            if start_frame > 0:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         
         with media_module._lock:
             media_module._job.update(
@@ -424,11 +666,15 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
 
         def read_frames():
             # Decode + effects run here so they overlap GPU inference.
+            frames_read = 0
             try:
                 while not interrupted():
+                    if trim and frames_read >= total:
+                        break
                     success, frame = capture.read()
                     if not success:
                         break
+                    frames_read += 1
                     image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGB")
                     image = media_module._apply_effects(
                         image, {"effects": SLIDER_DEFAULTS | {"Inversion": False}}
@@ -554,33 +800,34 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
                 "FFmpeg became unavailable while finalizing the upscaled video."
             )
         
+        ffmpeg_args = [ffmpeg, "-y", "-i", silent_output]
+        if trim:
+            # Cut the audio to the same in/out range as the trimmed video frames.
+            ffmpeg_args += ["-ss", f"{trim[0]:.3f}", "-t", f"{max(0.0, trim[1] - trim[0]):.3f}"]
+        ffmpeg_args += [
+            "-i",
+            str(source_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            "-shortest",
+            str(output_path),
+        ]
         subprocess.run(
-            [
-                ffmpeg,
-                "-y",
-                "-i",
-                silent_output,
-                "-i",
-                str(source_path),
-                "-map",
-                "0:v:0",
-                "-map",
-                "1:a?",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "18",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-movflags",
-                "+faststart",
-                "-shortest",
-                str(output_path),
-            ],
+            ffmpeg_args,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -626,7 +873,11 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
                     media_module,
                     output_path,
                     temporary_path=output_path,
-                    name=f"{Path(source_path).stem}_{options['factor']}{'p' if is_target(options['factor']) else 'x'}",
+                    name=(
+                        f"{Path(source_path).stem}_{options['factor']}"
+                        f"{'p' if is_target(options['factor']) else 'x'}"
+                        + ("_clip" if trim else "")
+                    ),
                 )
                 media_module._job = {
                     "running": False,
@@ -638,7 +889,10 @@ def upscale_video_worker(media_module, source_path, output_path, options, cancel
                 }
                 media_module._message = {
                     "type": "success",
-                    "text": "Upscaled video added to history.",
+                    "text": (
+                        "Upscaled test clip added to history."
+                        if trim else "Upscaled video added to history."
+                    ),
                 }
                 media_module._touch()
         except Exception as error:

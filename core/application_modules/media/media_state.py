@@ -56,6 +56,8 @@ def create_media_entry(
         "video_frame_count": int(video_frame_count),
         "video_frame_index": int(video_frame_index),
         "video_position": float(video_position),
+        "video_trim_start": None,
+        "video_trim_end": None,
         "source_path": str(source_path) if source_path else None,
         "temporary_path": str(temporary_path) if temporary_path else None,
         "realtime_url": None,

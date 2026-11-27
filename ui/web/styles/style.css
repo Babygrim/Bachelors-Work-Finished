@@ -106,6 +106,16 @@ button { color: inherit; }
 .video-toolbar { height: 58px; flex: 0 0 58px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line); background: #1c2220; }
 .video-tools-bottom { height: 48px; flex: 0 0 48px; display: flex; align-items: center; justify-content: flex-end; gap: 13px; padding: 0 14px; border-top: 1px solid var(--line); background: #1c2220; }
 .video-toolbar #video-seek { flex: 1; min-width: 70px; }
+.video-toolbar .video-timeline { position: relative; flex: 1; min-width: 70px; display: flex; align-items: center; }
+.trim-track { position: absolute; left: 7px; right: 7px; top: 50%; height: 16px; margin-top: -8px; pointer-events: none; }
+.trim-track-range { position: absolute; top: 50%; height: 3px; margin-top: -1.5px; background: rgba(197, 236, 113, .4); border-radius: 2px; }
+.trim-handle { position: absolute; top: 0; width: 9px; height: 16px; margin-left: -4.5px; padding: 0; border: 1px solid #1b2314; border-radius: 2px; background: var(--lime); cursor: ew-resize; pointer-events: auto; touch-action: none; }
+.trim-handle:hover:not(:disabled), .trim-handle:focus-visible { background: #d4f68a; outline: none; }
+.trim-handle:disabled { opacity: .35; cursor: not-allowed; }
+.trim-toolbar { height: 40px; flex: 0 0 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--line); background: #1c2220; }
+.trim-label { overflow: hidden; color: #9ba69e; font: 10px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.trim-actions { display: flex; flex: none; align-items: center; gap: 10px; }
+.trim-actions #trim-cut { min-height: 28px; padding: 0 11px; font-size: 11px; }
 .video-volume { visibility: hidden; opacity: 0; position: absolute; z-index: 4; right: -9px; bottom: 39px; width: 28px; height: 104px; display: flex; align-items: center; justify-content: center; padding: 8px 0; border: 1px solid #46524d; border-radius: 5px; background: #222a26; box-shadow: 0 8px 20px #0008; transition: opacity .2s ease 1.6s, visibility 0s linear 1.8s; }
 .video-audio-control { position: relative; }
 /* Shown at once on hover/focus; after the pointer leaves it lingers ~1.6 s (the transition delay) before fading. */

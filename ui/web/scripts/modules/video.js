@@ -1,5 +1,48 @@
 import { setMuteButton } from './realtime_audio.js';
 
+const $$ = (selector) => document.querySelector(selector);
+let trimDragActive = false;
+
+function formatClock(seconds) {
+  const value = Math.max(0, Math.floor(seconds || 0));
+  return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+}
+
+function positionTrimHandles(start, end, duration) {
+  const startPct = duration ? Math.max(0, Math.min(100, (start / duration) * 100)) : 0;
+  const endPct = duration ? Math.max(0, Math.min(100, (end / duration) * 100)) : 100;
+  $$('#trim-handle-start').style.left = `${startPct}%`;
+  $$('#trim-handle-end').style.left = `${endPct}%`;
+  $$('#trim-track-range').style.left = `${startPct}%`;
+  $$('#trim-track-range').style.width = `${Math.max(0, endPct - startPct)}%`;
+}
+
+// Called from app.js on every state refresh; keeps the trim handles, label and the
+// upscale-panel note in sync with the backend's trim range for the current video.
+export function syncTrimTimeline(next) {
+  const video = next?.video;
+  if (!video || !$$('#trim-track')) return;
+  const player = $$('#video-player');
+  const duration = Number.isFinite(player?.duration) ? player.duration : (video.duration || 0);
+  const hasTrim = video.trim_start != null && video.trim_end != null;
+  const start = hasTrim ? video.trim_start : 0;
+  const end = hasTrim ? video.trim_end : duration;
+  if (!trimDragActive) positionTrimHandles(start, end, duration);
+  $$('#trim-label').textContent = hasTrim
+    ? `Test clip ${formatClock(start)}\u2013${formatClock(end)} (${formatClock(end - start)})`
+    : 'Full video selected';
+  $$('#video-trim-note').textContent = hasTrim
+    ? `"Upscale video" will only process the ${formatClock(end - start)} test clip above.`
+    : `"Upscale video" will process the full ${formatClock(duration)} video.`;
+  const running = Boolean(next.job?.running);
+  $$('#trim-handle-start').disabled = running;
+  $$('#trim-handle-end').disabled = running;
+  $$('#trim-mark-start').disabled = running;
+  $$('#trim-mark-end').disabled = running;
+  $$('#trim-clear').disabled = running || !hasTrim;
+  $$('#trim-cut').disabled = running || !hasTrim;
+}
+
 export function bindVideoControls({
   $, callApi, runAction, getState, videoPlayer, realtimePlayer, syncVideoTimeline,
   applyPreview, setScale, setToast, getVideoNativeSize, setVideoNativeSize,
@@ -266,4 +309,73 @@ export function bindVideoControls({
     $('#crop-button').classList.add('active');
     setToast('Drag over the current frame to create a cropped image.');
   });
+
+  function trimDuration() {
+    const state = getState();
+    return Number.isFinite(videoPlayer.duration) ? videoPlayer.duration : (state?.video?.duration || 0);
+  }
+
+  function currentTrim() {
+    const state = getState();
+    const duration = trimDuration();
+    const hasTrim = state?.video?.trim_start != null && state?.video?.trim_end != null;
+    return {
+      start: hasTrim ? state.video.trim_start : 0,
+      end: hasTrim ? state.video.trim_end : duration,
+      duration,
+    };
+  }
+
+  function bindTrimHandle(isStart) {
+    const handle = $(isStart ? '#trim-handle-start' : '#trim-handle-end');
+    handle.addEventListener('pointerdown', (event) => {
+      if (handle.disabled) return;
+      event.preventDefault();
+      trimDragActive = true;
+      handle.setPointerCapture(event.pointerId);
+      const track = $('#trim-track');
+      const minGap = 1 / (getState()?.video?.fps || 30);
+      let pending = null;
+      const move = (moveEvent) => {
+        const { start, end, duration } = currentTrim();
+        if (!duration) return;
+        const rect = track.getBoundingClientRect();
+        const fraction = rect.width ? Math.max(0, Math.min(1, (moveEvent.clientX - rect.left) / rect.width)) : 0;
+        const time = fraction * duration;
+        pending = isStart
+          ? [Math.min(time, end - minGap), end]
+          : [start, Math.max(time, start + minGap)];
+        positionTrimHandles(pending[0], pending[1], duration);
+      };
+      const finish = async () => {
+        track.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', finish);
+        handle.removeEventListener('pointercancel', finish);
+        trimDragActive = false;
+        if (pending) await runAction('set_video_trim', pending[0], pending[1]);
+      };
+      track.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', finish, { once: true });
+      handle.addEventListener('pointercancel', finish, { once: true });
+    });
+  }
+  bindTrimHandle(true);
+  bindTrimHandle(false);
+
+  $('#trim-mark-start').addEventListener('click', async () => {
+    const { end, duration } = currentTrim();
+    if (!duration) return;
+    const minGap = 1 / (getState()?.video?.fps || 30);
+    const start = Math.max(0, Math.min(getCurrentVideoPosition(), end - minGap));
+    await runAction('set_video_trim', start, end);
+  });
+  $('#trim-mark-end').addEventListener('click', async () => {
+    const { start, duration } = currentTrim();
+    if (!duration) return;
+    const minGap = 1 / (getState()?.video?.fps || 30);
+    const end = Math.min(duration, Math.max(getCurrentVideoPosition(), start + minGap));
+    await runAction('set_video_trim', start, end);
+  });
+  $('#trim-clear').addEventListener('click', () => runAction('clear_video_trim'));
+  $('#trim-cut').addEventListener('click', () => runAction('cut_video_clip'));
 }
